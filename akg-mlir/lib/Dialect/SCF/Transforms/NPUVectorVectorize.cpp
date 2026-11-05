@@ -844,7 +844,14 @@ static bool appendLoopToMergedReductionGroup(scf::ForOp loop, scf::ForOp root, O
     }
   }
 
-  Value maxStepValue = builder.create<arith::ConstantIndexOp>(loop.getLoc(), maxStep);
+  // The max step names the allocation upper bound the reads/broadcasts the
+  // loop stamps into `maxSizes` allocate; a static trip count clamps the
+  // tile (`computeStaticVectorSize`), so it clamps the bound the same way.
+  // An unclamped label (e.g. `vector=64` on a 2-trip loop) would claim a
+  // 64-wide physical allocation whose valid region is only 2, and the
+  // one-grid sibling merge then pairs it with a sibling that allocated
+  // the true extent.
+  Value maxStepValue = builder.create<arith::ConstantIndexOp>(loop.getLoc(), vecSize);
   if (isDynamic) {
     vecSizeValue = computeDynamicVectorSize(loop, maxStepValue, builder, loop.getLoc(), nullptr);
   }
@@ -3390,7 +3397,12 @@ static LogicalResult handleNestedForOp(scf::ForOp nestedForOp, LoopVectorization
   }
 
   int64_t childVecSize = computeStaticVectorSize(tripCount, nestedMaxStep);
-  Value childMaxStep = ctx.builder.create<arith::ConstantIndexOp>(nestedForOp.getLoc(), nestedMaxStep);
+  // The max step clamps with the tile: a static trip count already names
+  // the exact allocation bound the reads/broadcasts stamping it into
+  // `maxSizes` allocate -- an unclamped label (e.g. `vector=64` on a
+  // 2-trip loop) would claim a 64-wide physical allocation whose valid
+  // region is only 2, mismatching the one-grid sibling merge.
+  Value childMaxStep = ctx.builder.create<arith::ConstantIndexOp>(nestedForOp.getLoc(), childVecSize);
   Value childVecSizeVal = isDynamic ? computeDynamicVectorSize(nestedForOp, childMaxStep, ctx.builder,
                                                                nestedForOp.getLoc(), &ctx.valueMapping)
                                     : Value();
@@ -5843,7 +5855,14 @@ static void runVectorization(scf::ForOp loop, VectorizationMode mode, OpBuilder 
   }
 
   int64_t actualStep = computeStaticVectorSize(tripCount, maxStepFromAttr);
-  Value maxStepValue = attrBuilder.create<arith::ConstantIndexOp>(loop.getLoc(), maxStepFromAttr);
+  // The max step names the allocation upper bound the reads/broadcasts
+  // stamped with it into `maxSizes` allocate; a static trip count clamps
+  // the tile, so it clamps the bound the same way -- an unclamped label
+  // (e.g. `vector=64` on a 2-trip loop) would claim a 64-wide physical
+  // allocation whose valid region is only 2, mismatching the one-grid
+  // sibling merge. A dynamic loop keeps the label: the runtime clamp
+  // (`computeDynamicVectorSize`) mirrors `computeStaticVectorSize`.
+  Value maxStepValue = attrBuilder.create<arith::ConstantIndexOp>(loop.getLoc(), actualStep);
   Value vectorSizeValue =
     !tripCount ? computeDynamicVectorSize(loop, maxStepValue, attrBuilder, loop.getLoc(), nullptr) : Value();
 

@@ -50,6 +50,7 @@ namespace {
 struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistLoopIndependentOps> {
  public:
   HoistLoopIndependentOps() {}
+  explicit HoistLoopIndependentOps(bool hoistForall) { this->hoistForall = hoistForall; }
 
   void runOnOperation() override {
     auto funcOp = getOperation();
@@ -242,8 +243,16 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
 
   // ----- Phase A: hoist loop-invariant loads / transfer_read / pure ops -----
 
-  // affine.for, scf.for and scf.forall
-  static bool isForLoop(Operation *op) { return isa<affine::AffineForOp, scf::ForOp, scf::ForallOp>(op); }
+  // affine.for and scf.for always; scf.forall only when hoistForall. The
+  // emitpy pipeline disables forall hoisting: values lifted out of a
+  // forall would escape the pypto.spmd scope the conversion creates for
+  // it, and tile loads reaching spmd from outside are rejected (InCore).
+  bool isForLoop(Operation *op) const {
+    if (isa<affine::AffineForOp, scf::ForOp>(op)) {
+      return true;
+    }
+    return hoistForall && isa<scf::ForallOp>(op);
+  }
 
   static Block *getForBody(Operation *loopOp) {
     if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp)) {
@@ -323,7 +332,7 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
   }
 
   // Collect enclosing fors (inner to outer).
-  static void collectEnclosingFors(Operation *op, SmallVectorImpl<Operation *> &loops) {
+  void collectEnclosingFors(Operation *op, SmallVectorImpl<Operation *> &loops) const {
     for (Operation *parent = op->getParentOp(); parent != nullptr; parent = parent->getParentOp()) {
       if (isForLoop(parent)) {
         loops.push_back(parent);
@@ -334,7 +343,7 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
   // Collect invariant reads (incl. transfer_read) and pure followers (e.g. extf).
   SmallVector<Operation *> collectLoopInvariantOps(Operation *outermostLoop) {
     SmallVector<Operation *> nestedLoops;
-    outermostLoop->walk([&nestedLoops](Operation *op) {
+    outermostLoop->walk([this, &nestedLoops](Operation *op) {
       if (isForLoop(op)) {
         nestedLoops.push_back(op);
       }
@@ -432,7 +441,7 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
 
   void hoistLoopInvariantLoad(func::FuncOp funcOp) {
     SmallVector<Operation *> outermostLoops;
-    funcOp.walk([&outermostLoops](Operation *op) {
+    funcOp.walk([this, &outermostLoops](Operation *op) {
       if (!isForLoop(op)) {
         return;
       }
@@ -467,5 +476,9 @@ struct HoistLoopIndependentOps : public impl::HoistLoopIndependentOpsBase<HoistL
 
 std::unique_ptr<OperationPass<func::FuncOp>> createHoistLoopIndependentOpsPass() {
   return std::make_unique<HoistLoopIndependentOps>();
+}
+
+std::unique_ptr<OperationPass<func::FuncOp>> createHoistLoopIndependentOpsPass(bool hoistForall) {
+  return std::make_unique<HoistLoopIndependentOps>(hoistForall);
 }
 }  // namespace mlir

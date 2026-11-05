@@ -29,7 +29,9 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -286,7 +288,7 @@ GroupPtr MemRefDependenceGraphForFusion::getGroupByNode(unsigned nodeId) {
 bool MemRefDependenceGraphForFusion::init() {
   // Map from a memref to the set of ids of the nodes that have ops accessing
   // the memref.
-  DenseMap<Value, SetVector<unsigned>> memrefAccesses;
+  llvm::MapVector<Value, SetVector<unsigned>> memrefAccesses;
   createInitNode(memrefAccesses);
   // Create Node Edges
   createEdges(memrefAccesses);
@@ -295,7 +297,7 @@ bool MemRefDependenceGraphForFusion::init() {
   return true;
 }
 
-void MemRefDependenceGraphForFusion::createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
+void MemRefDependenceGraphForFusion::createInitNode(llvm::MapVector<Value, SetVector<unsigned>> &memrefAccesses) {
   block->walk([this, &memrefAccesses](Operation *op) {
     if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
       if (isa<affine::AffineForOp>(op->getParentOp())) {
@@ -482,7 +484,7 @@ void MemRefDependenceGraphForFusion::addMultipleLoadEdges(Value memref, const Se
   }
 }
 
-bool MemRefDependenceGraphForFusion::createEdges(const DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
+bool MemRefDependenceGraphForFusion::createEdges(const llvm::MapVector<Value, SetVector<unsigned>> &memrefAccesses) {
   if (!MemRefDependenceGraph::createEdges(memrefAccesses)) {
     return false;
   }
@@ -1794,15 +1796,35 @@ void FusionCodeGenHelper::buildStrategyOpsA(const affine::FusionStrategy &strate
     }
     case affine::FusionStrategy::Sibling: {
       Value siblingMem = strategy.getSiblingFusionMemRef();
+      // Match by base (source) memref, mirroring collectLoadAndStoreOpsFromOps:
+      // accesses are collected alias-aware (via getSourceMemRef), so an exact
+      // Value comparison here can wrongly yield an empty op set when the loops
+      // access a subview of the dep memref (or the base of a subview dep).
+      Value siblingBase = siblingMem ? affine::getSourceMemRef(siblingMem) : Value();
       for (Operation *op : allOpsA) {
         auto load = dyn_cast<affine::AffineReadOpInterface>(op);
-        if (load && load.getMemRef() == siblingMem) {
+        if (load && siblingBase && affine::getSourceMemRef(load.getMemRef()) == siblingBase) {
           strategyOpsA.push_back(op);
         }
       }
       break;
     }
   }
+}
+
+// Returns true when `depInfo` ranks strictly better than the current
+// `best` candidate under the (loopDepth asc, non-block-arg first,
+// last-access idx desc) ordering.
+static bool ranksHigher(const DependenceInfo &depInfo, const DependenceInfo *best, size_t depIdx, size_t bestIdx) {
+  bool curIsBlockArg = isa<BlockArgument>(depInfo.memref);
+  bool bestIsBlockArg = isa<BlockArgument>(best->memref);
+  if (depInfo.loopDepth != best->loopDepth) {
+    return depInfo.loopDepth < best->loopDepth;
+  }
+  if (curIsBlockArg != bestIsBlockArg) {
+    return bestIsBlockArg && !curIsBlockArg;
+  }
+  return depIdx > bestIdx;
 }
 
 // Selects the most appropriate DependenceInfo from plan.depInfo for the fusion:
@@ -1824,49 +1846,64 @@ const DependenceInfo *FusionCodeGenHelper::selectDepInfo(const FusionPlan &plan,
 
   // Walk srcAffineForOp's body and record the last operation index that accesses
   // each candidate memref. Default pre-order walk follows lexical source order.
+  // Keys are normalized to base (source) memrefs so deps recorded through a
+  // subview chain stay eligible, mirroring the alias-aware collection in
+  // collectFusionAccesses.
   DenseMap<Value, size_t> lastAccessIdx;
+  llvm::SmallPtrSet<Value, 16> writtenBases;
   size_t opIdx = 0;
   srcAffineForOp.getBody()->walk([&](Operation *op) {
     Value memref;
+    bool isWrite = false;
     if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
       memref = read.getMemRef();
     } else if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
       memref = write.getMemRef();
+      isWrite = true;
     }
     if (memref) {
-      lastAccessIdx[memref] = opIdx;
+      Value base = affine::getSourceMemRef(memref);
+      lastAccessIdx[base] = opIdx;
+      if (isWrite) {
+        writtenBases.insert(base);
+      }
     }
     ++opIdx;
   });
 
   // Pick the best depInfo by (loopDepth asc, non-block-arg, last-access idx desc).
+  // For H (producer-consumer) plans, first restrict to deps whose src loop
+  // actually writes the memref: a dep only read by the src loop (RAR) leaves the
+  // producer-consumer strategy op set empty and silently degrades the fusion to
+  // I-fusion. When no dep carries a src-side write, fall back to all candidates.
+  bool requireSrcWrite = plan.fusionType == "H";
   const DependenceInfo *best = nullptr;
   size_t bestIdx = 0;
-  for (const auto &depInfo : plan.depInfo) {
-    auto it = lastAccessIdx.find(depInfo.memref);
-    if (it == lastAccessIdx.end()) {
-      continue;
-    }
-    if (best == nullptr) {
-      best = &depInfo;
-      bestIdx = it->second;
-      continue;
-    }
-    bool curIsBlockArg = isa<BlockArgument>(depInfo.memref);
-    bool bestIsBlockArg = isa<BlockArgument>(best->memref);
-    if (depInfo.loopDepth != best->loopDepth) {
-      if (depInfo.loopDepth < best->loopDepth) {
+  for (int pass = requireSrcWrite ? 0 : 1; pass < 2; ++pass) {
+    for (const auto &depInfo : plan.depInfo) {
+      if (!depInfo.memref) {
+        continue;
+      }
+      Value depBase = affine::getSourceMemRef(depInfo.memref);
+      auto it = lastAccessIdx.find(depBase);
+      if (it == lastAccessIdx.end()) {
+        continue;
+      }
+      if (pass == 0 && !writtenBases.count(depBase)) {
+        continue;
+      }
+      if (best == nullptr) {
+        best = &depInfo;
+        bestIdx = it->second;
+        continue;
+      }
+      if (ranksHigher(depInfo, best, it->second, bestIdx)) {
         best = &depInfo;
         bestIdx = it->second;
       }
-    } else if (curIsBlockArg != bestIsBlockArg) {
-      if (bestIsBlockArg && !curIsBlockArg) {
-        best = &depInfo;
-        bestIdx = it->second;
-      }
-    } else if (it->second > bestIdx) {
-      best = &depInfo;
-      bestIdx = it->second;
+    }
+    if (best != nullptr) {
+      break;
     }
   }
   return best;
@@ -1894,7 +1931,8 @@ unsigned FusionCodeGenHelper::findMaxLegalFusionDepth(
   SmallVector<Operation *, kSmallVectorSizeFour> strategyOpsA;
   buildStrategyOpsA(strategy, srcAccesses, strategyOpsA);
   if (strategyOpsA.empty()) {
-    llvm::dbgs() << "No strategy ops found for fusion\n";
+    llvm::dbgs() << "No strategy ops found for fusion (group " << plan.fusedGroup.from << " -> "
+                 << plan.fusedGroup.to << ", strategyKind=" << static_cast<int>(strategy.getStrategy()) << ")\n";
     return 0;
   }
 

@@ -41,6 +41,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 
 using namespace mlir;  // NOLINT(build/namespaces)
@@ -254,6 +255,22 @@ static Attribute buildOffsetsArg(ConversionPatternRewriter &rewriter, ValueRange
     operands.push_back(offset);
     items.push_back(rewriter.getIndexAttr(operands.size() - 1));
   }
+  return rewriter.getArrayAttr(items);
+}
+
+/// Prepends a constant leading unit dimension to a list-valued call
+/// argument: `"[a, b]"` becomes `"[1, a, b]"`, and an operand-reference
+/// list becomes `[1, <refs...>]`. The Python printer renders mixed lists
+/// of literal text and operand references natively, so the InCore 2-D
+/// sandwich can share the operand-protocol builders below.
+static Attribute prependLeadingUnit(ConversionPatternRewriter &rewriter, Attribute arg) {
+  if (auto opaque = dyn_cast<emitpy::OpaqueAttr>(arg)) {
+    StringRef text = opaque.getValue();
+    return rewriter.getAttr<emitpy::OpaqueAttr>("[1, " + text.substr(1).str());
+  }
+  SmallVector<Attribute> items{rewriter.getAttr<emitpy::OpaqueAttr>("1")};
+  auto list = cast<ArrayAttr>(arg).getValue();
+  items.append(list.begin(), list.end());
   return rewriter.getArrayAttr(items);
 }
 
@@ -906,23 +923,123 @@ class CreateTileOpPattern : public OpConversionPattern<pypto::CreateTileOp> {
 // View ops
 //===----------------------------------------------------------------------===//
 
+/// The unit attribute tagging a `pl.slice` call that copies its whole
+/// source at zero offsets: an identity slice to fold post-conversion.
+static constexpr StringLiteral kIdentitySliceAttr = "emitpy.identity_slice";
+
+/// Decides whether the slice window needs a trailing unit dim bridged up
+/// to the source rank. The generic case is a window one rank below the
+/// source; the special case is a row-axis reduction whose raw keepdim
+/// result lost the trailing axis. The reduction pattern already appends
+/// a `pl.reshape` collapsing the raw keepdim value when the scratch tile
+/// shape is static. Once the slice source flows through that reshape it
+/// matches the window rank, so the trailing-unit bridge only applies to
+/// the raw keepdim value.
+static bool sliceNeedsTrailingUnit(Value source, Value convertedSource, bool addLeadingUnit,
+                                   ArrayRef<int64_t> srcShape, ArrayRef<int64_t> window) {
+  bool addTrailingUnit = !addLeadingUnit && srcShape.size() == window.size() + 1;
+  if (!addTrailingUnit) {
+    if (auto reduction = source.getDefiningOp<pypto::ReductionOp>()) {
+      addTrailingUnit = !addLeadingUnit && reduction.getAxis() == pypto::ReduceAxis::row &&
+                        srcShape.size() == window.size();
+      if (addTrailingUnit) {
+        if (auto sourceCall = convertedSource.getDefiningOp<emitpy::CallOpaqueOp>();
+            sourceCall && sourceCall.getCallee() == "pl.reshape") {
+          addTrailingUnit = false;
+        }
+      }
+    }
+  }
+  return addTrailingUnit;
+}
+
+/// Detects the foldable identity slice: a full-shape static window at
+/// zero offsets with no dropped axes.
+static bool isIdentitySlice(pypto::SliceOp op, ArrayRef<int64_t> srcShape, ArrayRef<int64_t> window,
+                            ArrayRef<Value> offsets) {
+  bool identity = srcShape.size() == window.size() && window.size() == offsets.size();
+  for (size_t i = 0; identity && i < srcShape.size(); ++i) {
+    identity &= !ShapedType::isDynamic(srcShape[i]) && srcShape[i] == window[i];
+  }
+  identity &= llvm::all_of(offsets, [](Value offset) { return constIndexValue(offset) == std::optional<int64_t>(0); });
+  if (auto dropDims = op.getDropDims()) {
+    identity &= dropDims->empty();
+  }
+  return identity;
+}
+
 /// Rewrites `pypto.slice` into `pl.slice(src, [window], [offsets],
 /// drop_dims=[...])`: the window is full-rank over the source with unit
-/// dims standing in for rank-reducing drops.
+/// dims standing in for rank-reducing drops. A full-shape window at zero
+/// offsets with no dropped axes selects the whole tile and must fold
+/// away: `pl.slice` reallocates to the window (a valid bound), which
+/// would shrink the padded allocation the producing read made (7024 ->
+/// 7016) and desynchronize same-shape combines against the dynamic side.
+/// The fold lives here rather than in VectorToPypto because the slice
+/// also bridges the static source type to the dynamic result type that
+/// the elementwise consumers' strict same-shape check demands. Folding
+/// in-pattern is only possible when the replacement keeps the result
+/// type; the static-to-dynamic bridge does not, and replaceOp across it
+/// would demand a type materialization the converter does not provide.
+/// Such identity slices are emitted as ordinary `pl.slice` calls tagged
+/// `kIdentitySliceAttr` and folded once conversion has finished
+/// (foldIdentitySliceCalls).
 class SliceOpPattern : public OpConversionPattern<pypto::SliceOp> {
  public:
   using OpConversionPattern<pypto::SliceOp>::OpConversionPattern;
 
   LogicalResult matchAndRewrite(pypto::SliceOp op, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
+    SmallVector<int64_t> srcShape;
+    if (auto tile = dyn_cast<pypto::TileType>(op.getSource().getType())) {
+      srcShape = llvm::to_vector(tile.getShape());
+    } else if (auto shaped = dyn_cast<ShapedType>(op.getSource().getType())) {
+      srcShape = llvm::to_vector(shaped.getShape());
+    }
+    ArrayRef<int64_t> window = op.getWindow();
+    SmallVector<int64_t> adjustedWindow(window.begin(), window.end());
+    SmallVector<int64_t> adjustedDropDims;
+    // Only bridge a 1-D window up to a 2-D source: the leading unit picks a
+    // row out of the source. A 1-D window over a 1-D source needs no rank
+    // bridging (and the 2-D window would be rejected by the runtime).
+    bool addLeadingUnit = window.size() == 1 && srcShape.size() == window.size() + 1;
+    if (addLeadingUnit) {
+      adjustedWindow.insert(adjustedWindow.begin(), 1);
+      adjustedDropDims.push_back(0);
+      window = adjustedWindow;
+    }
+    bool addTrailingUnit =
+      sliceNeedsTrailingUnit(op.getSource(), adaptor.getSource(), addLeadingUnit, srcShape, window);
+    if (addTrailingUnit) {
+      adjustedWindow.push_back(1);
+      adjustedDropDims.push_back(static_cast<int64_t>(window.size()));
+      window = adjustedWindow;
+    }
+    SmallVector<Value> adjustedOffsets(adaptor.getOffsets().begin(), adaptor.getOffsets().end());
+    if (addLeadingUnit || addTrailingUnit) {
+      Value zero = rewriter.create<emitpy::LiteralOp>(op.getLoc(), rewriter.getIndexType(), "0");
+      if (addLeadingUnit) {
+        adjustedOffsets.insert(adjustedOffsets.begin(), zero);
+      } else {
+        adjustedOffsets.push_back(zero);
+      }
+    }
+    bool identity = isIdentitySlice(op, srcShape, window, adjustedOffsets);
     Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    // The fold must compare in the converted (emitpy) domain: the source
+    // operand is already an opaque value while the slice result is still
+    // typed statically, so the raw types never match.
+    if (identity && resultType && resultType == adaptor.getSource().getType()) {
+      rewriter.replaceOp(op, adaptor.getSource());
+      return success();
+    }
     if (!resultType) {
       return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     SmallVector<Value> operands{adaptor.getSource()};
-    Attribute offsetsArg = buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
+    Attribute offsetsArg = buildOffsetsArg(rewriter, adjustedOffsets, operands);
     SmallVector<Attribute> args{rewriter.getIndexAttr(0),
-                                rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(op.getWindow())),
+                                rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(window)),
                                 offsetsArg};
     SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr("")};
     if (auto dropDims = op.getDropDims()) {
@@ -930,12 +1047,32 @@ class SliceOpPattern : public OpConversionPattern<pypto::SliceOp> {
         args.push_back(rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(*dropDims)));
         keywords.push_back(rewriter.getStringAttr("drop_dims"));
       }
+    } else if (!adjustedDropDims.empty()) {
+      args.push_back(rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(adjustedDropDims)));
+      keywords.push_back(rewriter.getStringAttr("drop_dims"));
     }
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.slice", ValueRange(operands),
-                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    emitpy::CallOpaqueOp call = rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+        op, resultType, "pl.slice", ValueRange(operands), rewriter.getArrayAttr(args),
+        rewriter.getArrayAttr(keywords));
+    if (identity) {
+      call->setAttr(kIdentitySliceAttr, rewriter.getUnitAttr());
+    }
     return success();
   }
 };
+
+/// Spells a shape-list call argument: a fully static list becomes a
+/// Python list literal, while extents carrying dynamic (`?`) dimensions
+/// go through the operand protocol -- the ShapedType sentinel cannot be
+/// spelled as an annotation. `operands` is the growing call operand list
+/// the protocol appends references to.
+static Attribute shapeListArg(bool staticList, ArrayRef<int64_t> shape, ValueRange extents,
+                              SmallVectorImpl<Value> &operands, ConversionPatternRewriter &rewriter) {
+  if (staticList) {
+    return rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(shape));
+  }
+  return buildOffsetsArg(rewriter, extents, operands);
+}
 
 /// Rewrites `pypto.reshape` into `pl.reshape(src, [shape])`. Handles both
 /// the spike tile form and the pipeline form, where the intermediate
@@ -966,20 +1103,97 @@ class ReshapeOpPattern : public OpConversionPattern<pypto::ReshapeOp> {
       return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     SmallVector<Value> operands{adaptor.getSource()};
-    Attribute shapeArg;
-    if (!dynamic) {
-      shapeArg = rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(shape));
-    } else {
-      // The identity fallback keeps the npuvector/memref spelling; a `?`
-      // extent cannot be spelled as an annotation, and the Python
-      // translator accepts the source type for call_opaque results (as it
-      // does for dynamic loads).
-      shapeArg = buildOffsetsArg(rewriter, adaptor.getExtents(), operands);
-    }
+    // A dynamic result takes its shape list from the extents; so does a
+    // static re-view, whose extents spell the physical allocation behind
+    // the result type: `pl.reshape` conserves elements, so it must name
+    // the physical extent of every dimension, never the (smaller) valid
+    // result shape. The identity fallback keeps the npuvector/memref
+    // spelling; a `?` extent cannot be spelled as an annotation, and the
+    // Python translator accepts the source type for call_opaque results
+    // (as it does for dynamic loads).
+    Attribute shapeArg = shapeListArg(!dynamic && adaptor.getExtents().empty(), shape, adaptor.getExtents(),
+                                      operands, rewriter);
     SmallVector<Attribute> args{rewriter.getIndexAttr(0), shapeArg};
     SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.reshape", ValueRange(operands),
-                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    if (adaptor.getValidExtents().empty()) {
+      rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.reshape", ValueRange(operands),
+                                                        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+      return success();
+    }
+    if (adaptor.getValidExtents().size() != shape.size()) {
+      return rewriter.notifyMatchFailure(op, "reshape valid extents must match the result rank");
+    }
+    // The InCore backend requires a `pl.slice` offset tuple to carry at
+    // least (row, col) entries, while the DSL parser requires the offset
+    // rank to equal the shape rank — a rank-1 valid-carrying slice has no
+    // form that satisfies both. Inside an SPMD scope, sandwich the slice
+    // between reshapes ([N] -> [1, N] -> slice -> [N]); out-of-core
+    // kernels keep the plain rank-1 slice, which the runtime accepts.
+    bool inCoreRankOne = shape.size() == 1 &&
+                         (op->getParentOfType<pypto::SpmdOp>() ||
+                          op->getParentOfType<emitpy::SpmdScopeOp>());
+    SmallVector<int64_t> sliceShape = shape;
+    Attribute firstShapeArg = shapeArg;
+    Type sliceResultType = resultType;
+    if (inCoreRankOne) {
+      sliceShape.insert(sliceShape.begin(), 1);
+      firstShapeArg = prependLeadingUnit(rewriter, shapeArg);
+      // A static [1, N] spells as a fresh tile annotation; a `?` extent
+      // keeps the tile type itself, which the Python translator accepts
+      // for call_opaque results (as it already does for dynamic loads).
+      sliceResultType = getTypeConverter()->convertType(
+          pypto::TileType::get(getElementTypeOrSelf(op.getResult().getType()), sliceShape));
+    }
+    auto reshaped = rewriter.create<emitpy::CallOpaqueOp>(
+        op.getLoc(), sliceResultType, "pl.reshape", ValueRange(operands),
+        rewriter.getArrayAttr({rewriter.getIndexAttr(0), firstShapeArg}),
+        rewriter.getArrayAttr({rewriter.getStringAttr(""), rewriter.getStringAttr("")}));
+    SmallVector<Value> sliceOperands{reshaped.getResult(0)};
+    // The slice window carries the physical (padded) extent of every result
+    // dimension, exactly like the `shapes` argument of a dynamic load. The
+    // reshape result type may hold `?` dims whose ShapedType sentinel must
+    // not leak into the emitted text, so dynamic windows go through the
+    // operand protocol (buildOffsetsArg) instead of a shape literal. Build
+    // it before the valid-shape argument: operand references are indices
+    // into the growing call operand list.
+    // Same rule as the opening reshape: the slice window must carry the
+    // physical extent of every dimension, so it can narrow the padded
+    // allocation back down to the valid region.
+    Attribute windowArg = shapeListArg(!dynamic && adaptor.getExtents().empty(), sliceShape, adaptor.getExtents(),
+                                       sliceOperands, rewriter);
+    if (inCoreRankOne) {
+      windowArg = prependLeadingUnit(rewriter, windowArg);
+    }
+    SmallVector<int64_t> zeroShape(sliceShape.size(), 0);
+    Attribute zeroOffsets = rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(zeroShape));
+    Attribute validArg = buildOffsetsArg(rewriter, adaptor.getValidExtents(), sliceOperands);
+    if (inCoreRankOne) {
+      validArg = prependLeadingUnit(rewriter, validArg);
+    }
+    args[1] = windowArg;
+    args.push_back(zeroOffsets);
+    args.push_back(validArg);
+    keywords.push_back(rewriter.getStringAttr(""));
+    keywords.push_back(rewriter.getStringAttr("valid_shape"));
+    auto sliced = rewriter.create<emitpy::CallOpaqueOp>(op.getLoc(), sliceResultType, "pl.slice",
+                                                        ValueRange(sliceOperands), rewriter.getArrayAttr(args),
+                                                        rewriter.getArrayAttr(keywords));
+    if (!inCoreRankOne) {
+      rewriter.replaceOp(op, sliced.getResult(0));
+      return success();
+    }
+    // Close the sandwich: [1, N] -> [N]. The rank-1 shape list is spelled
+    // on a fresh call so dynamic operand references index the closing
+    // reshape's own operand list, not the opening one.
+    SmallVector<Value> finalOperands{sliced.getResult(0)};
+    // The closing reshape re-views the full physical window, so it takes
+    // the extents like the opening one.
+    Attribute finalShapeArg = shapeListArg(!dynamic && adaptor.getExtents().empty(), shape, adaptor.getExtents(),
+                                           finalOperands, rewriter);
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.reshape", ValueRange(finalOperands),
+                                                      rewriter.getArrayAttr({rewriter.getIndexAttr(0), finalShapeArg}),
+                                                      rewriter.getArrayAttr({rewriter.getStringAttr(""),
+                                                                             rewriter.getStringAttr("")}));
     return success();
   }
 };
@@ -1112,7 +1326,12 @@ class CmpOpPattern : public OpConversionPattern<pypto::CmpOp> {
 
 /// Rewrites `pypto.reduction` into `pl.row_<kind>(vector, scratch)` /
 /// `pl.col_<kind>(vector, scratch)`: a keepdim in-place fold of the last
-/// (row) or first (col) axis, working in the scratch tile.
+/// (row) or first (col) axis, working in the scratch tile. The keepdim raw
+/// value (`[..., 1]` / `[1, ...]`) is reshaped back down to the collapsed
+/// result rank when the scratch tile carries the statically allocated
+/// extents; scalar results (full reductions read their surviving `[i, 0]`
+/// partials straight out of the keepdim value) and dynamically shaped
+/// results keep the raw call.
 class ReductionOpPattern : public OpConversionPattern<pypto::ReductionOp> {
  public:
   using OpConversionPattern<pypto::ReductionOp>::OpConversionPattern;
@@ -1129,8 +1348,44 @@ class ReductionOpPattern : public OpConversionPattern<pypto::ReductionOp> {
       return rewriter.notifyMatchFailure(op, "result type has no emitpy counterpart");
     }
     std::string callee = "pl." + prefix.str() + suffix.str();
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, callee,
-                                                      ValueRange{adaptor.getVector(), adaptor.getScratch()});
+
+    // The scratch tile keeps the input's statically allocated extents, so
+    // dropping the folded axis from it spells the collapsed result shape.
+    SmallVector<int64_t> collapsed;
+    if (auto shapedResult = dyn_cast<ShapedType>(op.getResult().getType())) {
+      auto scratch = dyn_cast<pypto::TileType>(op.getScratch().getType());
+      if (scratch && !llvm::any_of(scratch.getShape(), ShapedType::isDynamic) &&
+          shapedResult.getRank() + 1 == scratch.getRank()) {
+        collapsed = llvm::to_vector(scratch.getShape());
+        collapsed.erase(collapsed.begin() + (op.getAxis() == pypto::ReduceAxis::row ? collapsed.size() - 1 : 0));
+      }
+    }
+    if (collapsed.empty()) {
+      rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, callee,
+                                                        ValueRange{adaptor.getVector(), adaptor.getScratch()});
+      return success();
+    }
+
+    SmallVector<int64_t> keepdim = collapsed;
+    if (op.getAxis() == pypto::ReduceAxis::row) {
+      keepdim.push_back(1);
+    } else {
+      keepdim.insert(keepdim.begin(), 1);
+    }
+    Type keepdimType = getTypeConverter()->convertType(
+        pypto::TileType::get(op.getContext(), getElementTypeOrSelf(op.getResult().getType()), keepdim));
+    if (!keepdimType) {
+      rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, callee,
+                                                        ValueRange{adaptor.getVector(), adaptor.getScratch()});
+      return success();
+    }
+    auto raw = rewriter.create<emitpy::CallOpaqueOp>(op.getLoc(), keepdimType, callee,
+                                                     ValueRange{adaptor.getVector(), adaptor.getScratch()});
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+        op, resultType, "pl.reshape", raw.getResult(0),
+        rewriter.getArrayAttr({rewriter.getIndexAttr(0),
+                               rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(collapsed))}),
+        rewriter.getArrayAttr({rewriter.getStringAttr(""), rewriter.getStringAttr("")}));
     return success();
   }
 };
@@ -1309,6 +1564,28 @@ static void eraseDeadOps(func::FuncOp funcOp) {
   }
 }
 
+/// Folds the `pl.slice` calls tagged `kIdentitySliceAttr` during
+/// conversion. The tag marks slices whose window is the whole source at
+/// zero offsets: keeping them would reallocate to the valid bound and
+/// shrink the padded allocation the producing read made. The fold runs
+/// after conversion because the slice bridges the static source type to
+/// the dynamic result type, which replaceOp cannot do under the
+/// conversion framework's materialization rules; plain call_opaque
+/// operands carry no type constraints, so the uses simply move back to
+/// the source operand.
+static void foldIdentitySliceCalls(func::FuncOp funcOp) {
+  SmallVector<emitpy::CallOpaqueOp> tagged;
+  funcOp.walk([&](emitpy::CallOpaqueOp call) {
+    if (call->hasAttr(kIdentitySliceAttr)) {
+      tagged.push_back(call);
+    }
+  });
+  for (emitpy::CallOpaqueOp call : tagged) {
+    call.getResult(0).replaceAllUsesWith(call.getOperand(0));
+    call.erase();
+  }
+}
+
 /// Loads a tile parameter into the local (core) view: the entry block
 /// argument becomes a `pl.load` of the annotated parameter.
 static void loadTileParameter(OpBuilder &builder, BlockArgument arg, ShapedType shaped) {
@@ -1423,6 +1700,10 @@ static void populateCallOpaquePatterns(RewritePatternSet &patterns, TypeConverte
   patterns.add<OpToCallOpaquePattern<pypto::FmodOp>>(typeConverter, patterns.getContext(), "pl.fmod");
   patterns.add<OpToCallOpaquePattern<pypto::MaximumOp>>(typeConverter, patterns.getContext(), "pl.maximum");
   patterns.add<OpToCallOpaquePattern<pypto::MinimumOp>>(typeConverter, patterns.getContext(), "pl.minimum");
+  // Tile-scalar clamps: the runtime's TMAXS/TMINS take the scalar directly,
+  // so no Vec buffer allocation rides on the constant bound.
+  patterns.add<OpToCallOpaquePattern<pypto::MaximumsOp>>(typeConverter, patterns.getContext(), "pl.maximums");
+  patterns.add<OpToCallOpaquePattern<pypto::MinimumsOp>>(typeConverter, patterns.getContext(), "pl.minimums");
   patterns.add<OpToCallOpaquePattern<pypto::AndOp>>(typeConverter, patterns.getContext(), "pl.and_");
   patterns.add<OpToCallOpaquePattern<pypto::OrOp>>(typeConverter, patterns.getContext(), "pl.or_");
   patterns.add<OpToCallOpaquePattern<pypto::XorOp>>(typeConverter, patterns.getContext(), "pl.xor");
@@ -1434,6 +1715,7 @@ static void populateCallOpaquePatterns(RewritePatternSet &patterns, TypeConverte
   patterns.add<OpToCallOpaquePattern<pypto::LogOp>>(typeConverter, patterns.getContext(), "pl.log");
   patterns.add<OpToCallOpaquePattern<pypto::SqrtOp>>(typeConverter, patterns.getContext(), "pl.sqrt");
   patterns.add<OpToCallOpaquePattern<pypto::RsqrtOp>>(typeConverter, patterns.getContext(), "pl.rsqrt");
+  patterns.add<OpToCallOpaquePattern<pypto::RecipOp>>(typeConverter, patterns.getContext(), "pl.recip");
   patterns.add<OpToCallOpaquePattern<pypto::SinOp>>(typeConverter, patterns.getContext(), "pl.sin");
   patterns.add<OpToCallOpaquePattern<pypto::CosOp>>(typeConverter, patterns.getContext(), "pl.cos");
   patterns.add<OpToCallOpaquePattern<pypto::MaxOp>>(typeConverter, patterns.getContext(), "pl.max");
@@ -1519,6 +1801,11 @@ struct ConvertPyptoToEmitPyPass : impl::ConvertPyptoToEmitPyBase<ConvertPyptoToE
       signalPassFailure();
       return;
     }
+
+    // Identity slices bridge the static-to-dynamic type change, so they
+    // cannot fold in-pattern; fold the tagged `pl.slice` calls here, for
+    // every function -- a spike function can carry the same bridge.
+    foldIdentitySliceCalls(funcOp);
 
     // Pipeline form: the vector-to-pypto stage marks the kernel and
     // normalizes the I/O to the PyPTO out-parameter model; finish the

@@ -50,8 +50,8 @@ struct MemRefDependenceGraphForFusion : public MemRefDependenceGraph {
 
   // Graph initialization
   bool init();
-  void createInitNode(llvm::DenseMap<Value, llvm::SetVector<unsigned>> &memrefAccesses);
-  bool createEdges(const llvm::DenseMap<Value, llvm::SetVector<unsigned>> &memrefAccesses);
+  void createInitNode(llvm::MapVector<Value, llvm::SetVector<unsigned>> &memrefAccesses);
+  bool createEdges(const llvm::MapVector<Value, llvm::SetVector<unsigned>> &memrefAccesses);
 
   // Group type analysis
   OperatorTemplate getGroupType(const std::vector<unsigned> &nodes);

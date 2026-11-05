@@ -22,6 +22,7 @@
 #include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
@@ -367,7 +368,7 @@ void MemRefDependenceGraph::getSuccessorNodes(unsigned id, std::vector<unsigned>
                  [](const Edge &edge) { return edge.id; });
 }
 
-void MemRefDependenceGraph::createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
+void MemRefDependenceGraph::createInitNode(llvm::MapVector<Value, SetVector<unsigned>> &memrefAccesses) {
   block->walk([this, &memrefAccesses](Operation *op) {
     if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
       // Create graph node for top-level load op.
@@ -476,7 +477,7 @@ void MemRefDependenceGraph::addMemrefDependenceEdges(Value memref, const SetVect
   }
 }
 
-bool MemRefDependenceGraph::createEdges(const DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
+bool MemRefDependenceGraph::createEdges(const llvm::MapVector<Value, SetVector<unsigned>> &memrefAccesses) {
   addSSAResultEdges();
 
   for (auto &memrefAndList : memrefAccesses) {
@@ -493,7 +494,7 @@ bool MemRefDependenceGraph::createEdges(const DenseMap<Value, SetVector<unsigned
 bool MemRefDependenceGraph::init() {
   // Map from a memref to the set of ids of the nodes that have ops accessing
   // the memref.
-  DenseMap<Value, SetVector<unsigned>> memrefAccesses;
+  llvm::MapVector<Value, SetVector<unsigned>> memrefAccesses;
   createInitNode(memrefAccesses);
 
   createEdges(memrefAccesses);

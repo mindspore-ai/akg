@@ -20,6 +20,7 @@
 #include <climits>
 
 #include <vector>
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -92,8 +93,11 @@ struct MemRefDependenceGraph {
   explicit MemRefDependenceGraph(Block *block, bool useAKGAnalysis = false)
       : block(block), useAKGAnalysis(useAKGAnalysis) {}
 
-  void createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses);
-  bool createEdges(const DenseMap<Value, SetVector<unsigned>> &memrefAccesses);
+  // Iteration order of memrefAccesses must be deterministic (insertion order,
+  // via MapVector): DenseMap buckets Values by pointer, whose layout depends on
+  // ASLR and would make edge creation order run-to-run nondeterministic.
+  void createInitNode(llvm::MapVector<Value, SetVector<unsigned>> &memrefAccesses);
+  bool createEdges(const llvm::MapVector<Value, SetVector<unsigned>> &memrefAccesses);
   bool init();
   // Returns the graph node for 'id'.
   Node *getNode(unsigned id);

@@ -23,7 +23,10 @@
 
 namespace mlir {
 
-std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeTypeForAscendPass(bool enableI64ToI32 = false);
+/// `allowIntCmp` relaxes the i32/i64 cmpi guard for pipelines whose backend
+/// lowers tile integer comparisons natively (emitpypto).
+std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeTypeForAscendPass(bool enableI64ToI32 = false,
+                                                                            bool allowIntCmp = false);
 
 }  // namespace mlir
 

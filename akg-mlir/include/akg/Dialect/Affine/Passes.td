@@ -276,6 +276,9 @@ def LegalizeTypeForAscend : Pass<"legalize-type-for-ascend", "func::FuncOp"> {
   let options = [
     Option<"enableI64ToI32", "enable-i64-to-i32", "bool", /*default=*/"false",
            "Enable i64 to i32 integer narrowing (default: false)">,
+    Option<"allowIntCmp", "allow-int-cmp", "bool", /*default=*/"false",
+           "Allow i32/i64 integer cmpi (non eq/ne) to reach the backend; "
+           "the emitpypto pipeline lowers tile cmpi natively (default: false)">,
   ];
   let dependentDialects = [
     "arith::ArithDialect",

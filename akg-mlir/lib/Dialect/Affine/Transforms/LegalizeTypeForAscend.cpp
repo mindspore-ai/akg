@@ -572,28 +572,37 @@ struct LegalizeBF16RewritePattern final : RewritePattern {
 
 class LegalizeTypeForAscend : public impl::LegalizeTypeForAscendBase<LegalizeTypeForAscend> {
  public:
-  explicit LegalizeTypeForAscend(bool enableI64ToI32_ = false) { enableI64ToI32 = enableI64ToI32_; }
+  explicit LegalizeTypeForAscend(bool enableI64ToI32_ = false, bool allowIntCmp_ = false) {
+    enableI64ToI32 = enableI64ToI32_;
+    allowIntCmp = allowIntCmp_;
+  }
 
   void runOnOperation() override {
     func::FuncOp func = getOperation();
     MLIRContext *context = &getContext();
 
-    // Pre-check: reject unsupported CmpIOp before pattern matching
+    // Pre-check: reject unsupported CmpIOp before pattern matching. The
+    // legacy backends only compare eq/ne on i32/i64; the emitpypto backend
+    // lowers tile cmpi with every integer predicate, so `allowIntCmp`
+    // lets those comparisons flow through untouched instead of failing
+    // the kernel here.
     bool hasUnsupportedOp = false;
-    func.walk([&](arith::CmpIOp cmpOp) {
-      auto inTy = cmpOp.getLhs().getType();
-      auto pre = cmpOp.getPredicate();
-      if (pre != arith::CmpIPredicate::eq && pre != arith::CmpIPredicate::ne) {
-        if (auto intTy = dyn_cast<IntegerType>(inTy)) {
-          if (intTy.getWidth() >= kI32BitWidth) {
-            emitError(cmpOp.getLoc()) << "arith::CmpIOp not support i32 or i64 integer in ascend.";
-            hasUnsupportedOp = true;
-            return WalkResult::interrupt();
+    if (!allowIntCmp) {
+      func.walk([&](arith::CmpIOp cmpOp) {
+        auto inTy = cmpOp.getLhs().getType();
+        auto pre = cmpOp.getPredicate();
+        if (pre != arith::CmpIPredicate::eq && pre != arith::CmpIPredicate::ne) {
+          if (auto intTy = dyn_cast<IntegerType>(inTy)) {
+            if (intTy.getWidth() >= kI32BitWidth) {
+              emitError(cmpOp.getLoc()) << "arith::CmpIOp not support i32 or i64 integer in ascend.";
+              hasUnsupportedOp = true;
+              return WalkResult::interrupt();
+            }
           }
         }
-      }
-      return WalkResult::advance();
-    });
+        return WalkResult::advance();
+      });
+    }
     if (hasUnsupportedOp) {
       signalPassFailure();
       return;
@@ -650,7 +659,7 @@ class LegalizeTypeForAscend : public impl::LegalizeTypeForAscendBase<LegalizeTyp
 };
 
 }  // namespace
-std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeTypeForAscendPass(bool enableI64ToI32) {
-  return std::make_unique<LegalizeTypeForAscend>(enableI64ToI32);
+std::unique_ptr<OperationPass<func::FuncOp>> createLegalizeTypeForAscendPass(bool enableI64ToI32, bool allowIntCmp) {
+  return std::make_unique<LegalizeTypeForAscend>(enableI64ToI32, allowIntCmp);
 }
 }  // namespace mlir

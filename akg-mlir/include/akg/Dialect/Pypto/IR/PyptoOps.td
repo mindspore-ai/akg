@@ -155,7 +155,7 @@ def Pypto_SliceOp : Pypto_Op<"slice"> {
   let hasVerifier = 1;
 }
 
-def Pypto_ReshapeOp : Pypto_Op<"reshape"> {
+def Pypto_ReshapeOp : Pypto_Op<"reshape", [AttrSizedOperandSegments]> {
   let summary = "View a tile or tensor under a different shape";
   let description =
     [{
@@ -170,11 +170,13 @@ def Pypto_ReshapeOp : Pypto_Op<"reshape"> {
     preserved. `extents` carries the runtime bound of every dimension and is
     left out for statically shaped results (mirroring `pypto.tile_full`).
 
-    The emitpy lowering emits `pl.reshape(src, [shape])`.
+    The emitpy lowering emits `pl.reshape(src, [shape])`. When supplied,
+    `validExtents` preserves the valid region independently of the physical
+    allocation shape and emits `pl.reshape(src, [shape], valid_shape=[valid])`.
   }];
-  let arguments = (ins AnyType:$source, Variadic<Index>:$extents);
+  let arguments = (ins AnyType:$source, Variadic<Index>:$extents, Variadic<Index>:$validExtents);
   let results = (outs AnyType:$result);
-  let assemblyFormat = "$source (`extents` `[` $extents^ `]`)? attr-dict `:` type($source) `to` type($result)";
+  let assemblyFormat = "$source (`extents` `[` $extents^ `]`)? (`valid` `[` $validExtents^ `]`)? attr-dict `:` type($source) `to` type($result)";
   let hasVerifier = 1;
 }
 
@@ -325,6 +327,15 @@ def Pypto_DivOp : Pypto_BinaryOp<"div"> { let summary = "Elementwise or scalar d
 def Pypto_FmodOp : Pypto_BinaryOp<"fmod"> { let summary = "Elementwise or scalar remainder (`pl.fmod`)"; }
 def Pypto_MaximumOp : Pypto_BinaryOp<"maximum"> { let summary = "Elementwise maximum (`pl.maximum`)"; }
 def Pypto_MinimumOp : Pypto_BinaryOp<"minimum"> { let summary = "Elementwise minimum (`pl.minimum`)"; }
+// The tile-scalar clamps: `pl.maximums`/`pl.minimums` take a tile lhs and a
+// scalar rhs (TMAXS/TMINS intrinsics), so the scalar needs no tile_full
+// carrier and no Vec buffer allocation of its own.
+def Pypto_MaximumsOp : Pypto_BinaryOp<"maximums"> {
+  let summary = "Elementwise maximum of tile and scalar (`pl.maximums`)";
+}
+def Pypto_MinimumsOp : Pypto_BinaryOp<"minimums"> {
+  let summary = "Elementwise minimum of tile and scalar (`pl.minimums`)";
+}
 def Pypto_AndOp : Pypto_BinaryOp<"and"> { let summary = "Elementwise or scalar bitwise and (`pl.and_`)"; }
 def Pypto_OrOp : Pypto_BinaryOp<"or"> { let summary = "Elementwise or scalar bitwise or (`pl.or_`)"; }
 def Pypto_XorOp : Pypto_BinaryOp<"xor"> { let summary = "Elementwise or scalar bitwise xor (`pl.xor`)"; }
@@ -404,6 +415,7 @@ def Pypto_ExpOp : Pypto_UnaryOp<"exp"> { let summary = "Elementwise exponential 
 def Pypto_LogOp : Pypto_UnaryOp<"log"> { let summary = "Elementwise natural logarithm (`pl.log`)"; }
 def Pypto_SqrtOp : Pypto_UnaryOp<"sqrt"> { let summary = "Elementwise square root (`pl.sqrt`)"; }
 def Pypto_RsqrtOp : Pypto_UnaryOp<"rsqrt"> { let summary = "Elementwise reciprocal square root (`pl.rsqrt`)"; }
+def Pypto_RecipOp : Pypto_UnaryOp<"recip"> { let summary = "Elementwise reciprocal (`pl.recip`)"; }
 def Pypto_SinOp : Pypto_UnaryOp<"sin"> { let summary = "Elementwise sine (`pl.sin`)"; }
 def Pypto_CosOp : Pypto_UnaryOp<"cos"> { let summary = "Elementwise cosine (`pl.cos`)"; }
 
