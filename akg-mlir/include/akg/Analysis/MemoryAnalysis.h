@@ -22,6 +22,7 @@ struct PeakAnalysisInput {
   llvm::DenseMap<scf::ForOp, int64_t> tileUpperBoundPerLoop;
   llvm::DenseMap<scf::ForOp, bool> isReduceXorAllVectorizeLoop;
   llvm::DenseMap<scf::ForOp, bool> isWholeTiledLoop;
+  bool enablePto = false;
   bool enableMultibuffer = true;
   bool alignBufferSizeTo256Bits = true;
 };

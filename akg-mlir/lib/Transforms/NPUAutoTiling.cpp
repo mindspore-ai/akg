@@ -232,11 +232,12 @@ struct SwitchCaseDesc {
 
 class TilingBase {
  public:
-  explicit TilingBase(func::FuncOp f)
+  explicit TilingBase(func::FuncOp f, bool enablePto = false)
       : originalKernel_(f),
         module_(f ? f->getParentOfType<ModuleOp>() : ModuleOp()),
         kernelInfo_(std::make_unique<KernelInfo>()),
-        tilingInfo_() {
+        tilingInfo_(),
+        enablePto_(enablePto) {
     if (kernelInfo_) {
       kernelInfo_->originalKernel = f;
     }
@@ -295,7 +296,7 @@ class TilingBase {
     llvm::DenseMap<int64_t, mlir::func::FuncOp> tilingFuncMap;
     mlir::autotiling::TilingMetadataMap tilingMetadataMap;
     if (failed(mlir::autotiling::createTilingFunctions(originalKernel_, builder, tilingFuncMap,
-                                                       tilingInfo_.isStaticShape, &tilingMetadataMap))) {
+                                                       tilingInfo_.isStaticShape, &tilingMetadataMap, enablePto_))) {
       return failure();
     }
     for (const auto &it : tilingFuncMap) {
@@ -874,7 +875,8 @@ class TilingBase {
       if (!tilingInfo_.isStaticShape && metadata && metadata->maxVectorTile > 0) {
         f->setAttr(kDynamicMaxTileAttr, builder.getI64IntegerAttr(metadata->maxVectorTile));
       }
-      if (failed(mlir::autotiling::applyTilingFromTilingFunc(f, builder, tilingInfo_.isStaticShape, metadata))) {
+      if (failed(
+            mlir::autotiling::applyTilingFromTilingFunc(f, builder, tilingInfo_.isStaticShape, metadata, enablePto_))) {
         return failure();
       }
 
@@ -893,7 +895,8 @@ class TilingBase {
     auto *ctx = builder.getContext();
 
     bool isStaticShape = true;
-    if (failed(mlir::autotiling::applyTilingFromTilingFunc(originalKernel_, builder, isStaticShape))) {
+    if (failed(
+          mlir::autotiling::applyTilingFromTilingFunc(originalKernel_, builder, isStaticShape, nullptr, enablePto_))) {
       originalKernel_.emitError("static tiling: failed to apply tiling on kernel");
       return failure();
     }
@@ -1146,6 +1149,7 @@ class TilingBase {
   ModuleOp module_;
   std::unique_ptr<KernelInfo> kernelInfo_;
   TilingInfo tilingInfo_;
+  bool enablePto_;
   static AutoTilingOptions options_;
 };
 
@@ -1158,7 +1162,8 @@ class PureElemwiseTiling : public TilingBase {
 };
 
 struct NPUAutoTiling : public mlir::impl::NPUAutoTilingBase<NPUAutoTiling> {
-  explicit NPUAutoTiling(StringRef arch = StringRef()) : arch(arch.str()) {}
+  explicit NPUAutoTiling(StringRef arch = StringRef(), bool enablePto = false)
+      : arch(arch.str()), enablePto(enablePto) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<scf::SCFDialect, hivm::HIVMDialect>();
@@ -1188,7 +1193,7 @@ struct NPUAutoTiling : public mlir::impl::NPUAutoTilingBase<NPUAutoTiling> {
 
     OpBuilder builder(module.getContext());
     for (func::FuncOp k : kernels) {
-      PureElemwiseTiling sch(k);
+      PureElemwiseTiling sch(k, enablePto);
       if (failed(sch.runOnOperation(builder))) {
         k.emitError("memref-based auto-tiling failed");
         signalPassFailure();
@@ -1199,11 +1204,13 @@ struct NPUAutoTiling : public mlir::impl::NPUAutoTilingBase<NPUAutoTiling> {
 
  private:
   std::string arch;
+  bool enablePto;
 };
 
 }  // namespace
 }  // namespace mlir
 
-std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::createNPUAutoTilingPass(const std::string &arch) {
-  return std::make_unique<NPUAutoTiling>(arch);
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>> mlir::createNPUAutoTilingPass(const std::string &arch,
+                                                                                   bool enablePto) {
+  return std::make_unique<NPUAutoTiling>(arch, enablePto);
 }

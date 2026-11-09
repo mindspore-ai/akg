@@ -89,10 +89,11 @@ using TilingMetadataMap = DenseMap<int64_t, TilingMetadata>;
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape = false);
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
-                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape, TilingMetadata *metadata);
+                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape, TilingMetadata *metadata,
+                                    bool enablePto = false);
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
-                                    TilingMetadataMap *metadataByKey);
+                                    TilingMetadataMap *metadataByKey, bool enablePto = false);
 LogicalResult materializeDynamicSelectorOuterTiles(func::FuncOp originalKernel, func::FuncOp hostTilingFunc,
                                                    const TilingMetadata &metadata, OpBuilder &builder,
                                                    llvm::SmallVectorImpl<Value> &outerTiles);
@@ -103,7 +104,7 @@ LogicalResult materializeDynamicSelectorOuterTiles(func::FuncOp originalKernel, 
 // isStaticShape: if true, calculate tile sizes using auto-tiling and create tileSizeValues directly
 LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &builder, bool isStaticShape = false);
 LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &builder, bool isStaticShape,
-                                        const TilingMetadata *metadata);
+                                        const TilingMetadata *metadata, bool enablePto = false);
 
 }  // namespace autotiling
 }  // namespace mlir

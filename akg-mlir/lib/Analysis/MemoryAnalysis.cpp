@@ -90,6 +90,8 @@ struct BufferInfo {
   int64_t totalBufferSize = 0;
   Type elementType;
   llvm::SmallVector<int64_t, kSmallVectorSizeFour> dimLoopIndices;
+  // Element-count alignment for each allocation axis; empty outside PTO chains.
+  llvm::SmallVector<int64_t, kSmallVectorSizeFour> ptoDimAlignElems;
   bool propagateAlignAxis = false;
   bool isVirtual = false;
   int64_t OriginOpRecordIndex;
@@ -539,6 +541,10 @@ static void dumpBufferIndexSummary(llvm::raw_ostream &os, int64_t bufIdx, ArrayR
      << " virtual=" << (info.isVirtual ? 1 : 0) << " multiNum=" << info.multiNum << " alloc=" << info.allocTime
      << " free=" << info.freeTime << " originOpRec=" << info.OriginOpRecordIndex << " dimLoops=";
   dumpInt64IndexList(os, info.dimLoopIndices);
+  if (!info.ptoDimAlignElems.empty()) {
+    os << " ptoDimAlignElems=";
+    dumpInt64IndexList(os, info.ptoDimAlignElems);
+  }
   os << '}';
 }
 
@@ -674,7 +680,7 @@ class MemoryPeakEstimator {
   void initPerOpForForOp_(scf::ForOp forOp);
   void initPerOpForIfOp_(scf::IfOp ifOp);
   void initPerOpForGenericOp_(Operation *op);
-  void initReduceOps_(OpRecord &rec, BufferInfo &outputBufferInfo, Operation *op);
+  void initReduceOps_(int64_t recIndex, int64_t bufferIndex, Operation *op);
   void InferOutputBufferShape_(BufferInfo &outputBufferInfo, Operation *op, OpRecord &rec,
                                bool recordInlineBroadcastExtraBuffer = true);
   LoadAlignAxisResolution resolveLoadAppendAlignAxis_(memref::LoadOp loadOp, ArrayRef<int64_t> rawDimLoopIndices,
@@ -710,6 +716,9 @@ class MemoryPeakEstimator {
 
   void computeBufferLifetimes();
   void modelReduceExtraBuffer();
+  void propagatePtoDimPadding();
+  void markPtoReductionPadding(const OpRecord &rec, SmallVectorImpl<int64_t> &worklist);
+  void markPtoTransposePadding(const OpRecord &rec, SmallVectorImpl<int64_t> &worklist);
   void modelSelectExtraBuffer();
   void modelNegExtraBuffer();
   void modelLoadExtraBuffer();
@@ -2066,6 +2075,11 @@ int64_t MemoryPeakEstimator::totalBitsfromBuffer(const BufferInfo &info) const {
   }
   SmallVector<int64_t, kSmallVectorSizeFour> bounds;
   DimLoopIndicesToShape(info.dimLoopIndices, bounds);
+  if (!info.ptoDimAlignElems.empty()) {
+    std::transform(bounds.begin(), bounds.end(), info.ptoDimAlignElems.begin(), bounds.begin(),
+                   [](int64_t extent, int64_t unit) { return ceilFactor(extent, unit); });
+    return totalBitsFromShape(bounds, info.elementType, false);
+  }
   // Share the physical row layout with ArithToHIVM's buffer-size marks.
   // Appended alignment axes are already represented in these storage bounds.
   if (input_.alignBufferSizeTo256Bits) {
@@ -2546,7 +2560,12 @@ void MemoryPeakEstimator::inferShapeFromInput_(ArrayRef<int64_t> inputBufferInde
   }
 }
 
-void MemoryPeakEstimator::initReduceOps_(OpRecord &rec, BufferInfo &outputBufferInfo, Operation *op) {
+void MemoryPeakEstimator::initReduceOps_(int64_t recIndex, int64_t bufferIndex, Operation *op) {
+  // Reserve both virtual records and the result before taking references.
+  if (perOpList_.capacity() < perOpList_.size() + 2) perOpList_.reserve(perOpList_.size() * 2 + 2);
+  if (bufferInfoList_.size() == bufferInfoList_.capacity()) bufferInfoList_.reserve(bufferInfoList_.size() * 2 + 1);
+  OpRecord &rec = perOpList_[recIndex];
+  BufferInfo &outputBufferInfo = bufferInfoList_[bufferIndex];
   outputBufferInfo.isVirtual = true;
 
   SmallVector<int64_t, kSmallVectorSizeFour> loopAxes;
@@ -2685,7 +2704,7 @@ void MemoryPeakEstimator::initPerOpForGenericOp_(Operation *op) {
     return;
   }
 
-  initReduceOps_(rec, bufferInfoList_[valIndex], op);
+  initReduceOps_(rec.Index, valIndex, op);
 }
 
 static void walkFuncBodyUntilReturn(func::FuncOp func, WalkOrder order,
@@ -3413,10 +3432,174 @@ void MemoryPeakEstimator::modelNegExtraBuffer() {
   }
 }
 
+// Match VectorToPypto's partial row/column reductions. Full reductions use a
+// separate reshape/scalar lowering and must not acquire surviving-axis padding.
+static bool requiresPtoReductionPadding(const OpRecord &rec, const BufferInfo &src) {
+  if (!rec.isVirtualOp || rec.opType != kOpTypeArithReduce || src.dimLoopIndices.size() < 2) return false;
+  if (!isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp, arith::MaximumFOp, arith::MaxNumFOp,
+           arith::MinimumFOp, arith::MinNumFOp, arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp>(
+        rec.sourceOp))
+    return false;
+  auto axes = rec.sourceOp->getAttrOfType<ArrayAttr>(kReductionAxesStr);
+  if (!axes || axes.size() != 1) return false;
+  auto axis = dyn_cast<IntegerAttr>(axes[0]);
+  return axis && (axis.getInt() == 0 || axis.getInt() == static_cast<int64_t>(src.dimLoopIndices.size()) - 1);
+}
+
+static int64_t ptoDimAlignElems(Type type) {
+  const int64_t bytes = getElementTypeOrSelf(type).getIntOrFloatBitWidth() / akg::kNpuBitsPerByte;
+  const int64_t blockBytes = kVectorBlockSizeBit / akg::kNpuBitsPerByte;
+  return bytes > 0 ? blockBytes / std::gcd(blockBytes, bytes) : 1;
+}
+
+static bool setPtoDimAlignment(BufferInfo &info, size_t axis, int64_t unit) {
+  bool changed = info.ptoDimAlignElems.empty();
+  if (changed) {
+    info.ptoDimAlignElems.assign(info.dimLoopIndices.size(), 1);
+    info.ptoDimAlignElems.back() = ptoDimAlignElems(info.elementType);
+  }
+  int64_t &current = info.ptoDimAlignElems[axis];
+  changed |= current < unit;
+  current = std::max(current, unit);
+  return changed;
+}
+
+// Loop IDs identify corresponding axes across casts, broadcasts and reduced
+// results. Never copy a rank position onto a different logical axis.
+static bool mergePtoDimAlignment(const BufferInfo &src, BufferInfo &dst) {
+  // Scalar loop carries and constants use the existing broadcast model; they
+  // are not allocation-preserving SSA tiles in VectorToPypto.
+  if (dst.isScalar ||
+      (dst.originalValue && (isa<BlockArgument>(dst.originalValue) || isConstantSsaValue(dst.originalValue))))
+    return false;
+  bool changed = false;
+  for (auto [axis, unit] : llvm::enumerate(src.ptoDimAlignElems)) {
+    const int64_t loop = src.dimLoopIndices[axis];
+    if (loop <= 0 || unit <= 1) continue;
+    auto it = llvm::find(dst.dimLoopIndices, loop);
+    if (it != dst.dimLoopIndices.end()) {
+      changed |= setPtoDimAlignment(dst, std::distance(dst.dimLoopIndices.begin(), it), unit);
+    }
+  }
+  return changed;
+}
+
+// Scalar arith/math forms that become allocation-preserving PTO tile ops.
+// Reductions themselves are connected separately on their surviving axes.
+static bool keepsPtoOperandAllocation(const OpRecord &rec) {
+  if (rec.sourceOp->hasAttr(kReductionAxesStr) && (!rec.isVirtualOp || rec.VirtualIndex != 0)) return false;
+  return isa<arith::AddFOp, arith::AddIOp, arith::SubFOp, arith::SubIOp, arith::MulFOp, arith::MulIOp, arith::DivFOp,
+             arith::DivSIOp, arith::DivUIOp, arith::MaximumFOp, arith::MinimumFOp, arith::MaxNumFOp, arith::MinNumFOp,
+             arith::MaxSIOp, arith::MinSIOp, arith::MaxUIOp, arith::MinUIOp, arith::NegFOp, arith::ExtFOp,
+             arith::TruncFOp, arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp, arith::SIToFPOp, arith::UIToFPOp,
+             arith::FPToSIOp, arith::FPToUIOp, arith::SelectOp, arith::CmpFOp, arith::CmpIOp, math::AbsFOp, math::ExpOp,
+             math::LogOp, math::SqrtOp, math::RsqrtOp, math::SinOp, math::CosOp, math::RoundOp, math::FloorOp,
+             math::CeilOp>(rec.sourceOp);
+}
+
+void MemoryPeakEstimator::markPtoReductionPadding(const OpRecord &rec, SmallVectorImpl<int64_t> &worklist) {
+  if (rec.opType != kOpTypeArithReduce) return;
+  auto &src = bufferInfoList_[rec.inputBufferIndexes.front()];
+  if (!requiresPtoReductionPadding(rec, src)) return;
+  auto &dst = bufferInfoList_[rec.outputBufferIndex];
+  const int64_t unit = ptoDimAlignElems(dst.elementType);
+  auto axes = rec.sourceOp->getAttrOfType<ArrayAttr>(kReductionAxesStr);
+  const int64_t folded = cast<IntegerAttr>(axes[0]).getInt();
+  for (size_t axis = 0; axis < src.dimLoopIndices.size(); ++axis) {
+    if (static_cast<int64_t>(axis) != folded) setPtoDimAlignment(src, axis, unit);
+  }
+  mergePtoDimAlignment(src, dst);
+  worklist.push_back(src.Index);
+  worklist.push_back(dst.Index);
+}
+
+// Match the 2D or trailing-pair N-dimensional transpose in FlattenTileNdTo2D.
+// Accesses may omit enclosing batch loops, but must keep the same tile axes.
+static void markPtoTransposeAxes(BufferInfo &info, ArrayRef<int64_t> targetOrder, SmallVectorImpl<int64_t> &worklist) {
+  ArrayRef<int64_t> sourceOrder = info.dimLoopIndices;
+  if (info.isScalar || sourceOrder.size() < 2 || llvm::any_of(sourceOrder, [](int64_t axis) { return axis <= 0; }))
+    return;
+  SmallVector<int64_t> projectedOrder;
+  llvm::copy_if(targetOrder, std::back_inserter(projectedOrder),
+                [sourceOrder](int64_t axis) { return llvm::is_contained(sourceOrder, axis); });
+  if (projectedOrder.size() != sourceOrder.size()) return;
+  std::swap(projectedOrder[projectedOrder.size() - 2], projectedOrder.back());
+  if (ArrayRef<int64_t>(projectedOrder) != sourceOrder) return;
+  // Source columns become destination rows; source rows become destination
+  // columns. Both physical extents must satisfy the contiguous-axis byte grid.
+  const int64_t unit = ptoDimAlignElems(info.elementType);
+  setPtoDimAlignment(info, sourceOrder.size() - 2, unit);
+  setPtoDimAlignment(info, sourceOrder.size() - 1, unit);
+  worklist.push_back(info.Index);
+}
+
+void MemoryPeakEstimator::markPtoTransposePadding(const OpRecord &rec, SmallVectorImpl<int64_t> &worklist) {
+  if (rec.isVirtualOp || !rec.sourceOp) return;
+  if (isa<memref::LoadOp>(rec.sourceOp)) {
+    if (rec.outputBufferIndex < 0) return;
+    SmallVector<scf::ForOp, kSmallVectorSizeEight> loops;
+    getEnclosingScfForOps(rec.sourceOp, loops);
+    SmallVector<int64_t, kSmallVectorSizeFour> order;
+    inferDimLoopIndicesFromForOps_(loops, order);
+    markPtoTransposeAxes(bufferInfoList_[rec.outputBufferIndex], order, worklist);
+    return;
+  }
+  if (auto store = dyn_cast<memref::StoreOp>(rec.sourceOp)) {
+    auto input = bufferInfoIndexMap_.find(store.getValue());
+    if (input == bufferInfoIndexMap_.end()) return;
+    SmallVector<int64_t, kSmallVectorSizeEight> order;
+    inferDimLoopIndices(store, store.getMemRefType().getRank(), forOpToIndex_, order);
+    markPtoTransposeAxes(bufferInfoList_[input->second], order, worklist);
+    return;
+  }
+  if (rec.outputBufferIndex < 0 || !keepsPtoOperandAllocation(rec)) return;
+  const auto &order = bufferInfoList_[rec.outputBufferIndex].dimLoopIndices;
+  for (int64_t input : rec.inputBufferIndexes) {
+    markPtoTransposeAxes(bufferInfoList_[input], order, worklist);
+  }
+}
+
+// Allocation-preserving operations inherit bounds in both directions: a cast
+// can require a wider allocation, and sibling operands must agree on extents.
+// Merge per-axis requirements to a fixed point; compute bits only afterwards.
+void MemoryPeakEstimator::propagatePtoDimPadding() {
+  SmallVector<SmallVector<int64_t>> edges(bufferInfoList_.size());
+  SmallVector<int64_t> worklist;
+  for (const OpRecord &rec : perOpList_) {
+    markPtoReductionPadding(rec, worklist);
+    markPtoTransposePadding(rec, worklist);
+    if (rec.outputBufferIndex < 0 || !rec.sourceOp) continue;
+    const bool reduction = rec.opType == kOpTypeArithReduce &&
+                           requiresPtoReductionPadding(rec, bufferInfoList_[rec.inputBufferIndexes.front()]);
+    if (!reduction && !keepsPtoOperandAllocation(rec)) continue;
+    for (int64_t input : rec.inputBufferIndexes) {
+      if (input == rec.outputBufferIndex) continue;
+      edges[input].push_back(rec.outputBufferIndex);
+      edges[rec.outputBufferIndex].push_back(input);
+    }
+  }
+  while (!worklist.empty()) {
+    const int64_t index = worklist.pop_back_val();
+    for (int64_t next : edges[index]) {
+      if (mergePtoDimAlignment(bufferInfoList_[index], bufferInfoList_[next])) worklist.push_back(next);
+    }
+  }
+  for (BufferInfo &info : bufferInfoList_) {
+    if (!info.ptoDimAlignElems.empty()) info.totalBufferSize = totalBitsfromBuffer(info);
+  }
+}
+
 void MemoryPeakEstimator::modelReduceExtraBuffer() {
   for (int64_t index : TimelineOpIndexList) {
     OpRecord &opRecord = perOpList_[index];
     if (opRecord.opType == kOpTypeArithReduce) {
+      const auto &source = bufferInfoList_[opRecord.inputBufferIndexes.front()];
+      // VectorToPypto creates a full input-shaped scratch tile for every
+      // partial reduction, even when all extents were already aligned.
+      if (input_.enablePto && requiresPtoReductionPadding(opRecord, source)) {
+        opRecord.extraBufferSizes.push_back(totalBitsfromBuffer(source));
+        continue;
+      }
       Operation *originOp = opRecord.sourceOp;
 
       SmallVector<int64_t, kSmallVectorSizeFour> loopAxes;
@@ -3720,6 +3903,7 @@ void MemoryPeakEstimator::run(PeakAnalysisResult &out) {
   propagateTileUpperBoundsInMap(input_);
   normalizeUnitTileUpperBoundsToZero(input_);
   initPerOp_();
+  if (input_.enablePto) propagatePtoDimPadding();
   analyzeConditionalControlFlow_();
 
   modelVirtualOps();
