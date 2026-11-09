@@ -143,6 +143,10 @@ def HoistLoopIndependentOps: Pass<"hoist-loop-independent-ops", "func::FuncOp"> 
     memory-effect-free (Pure) ops out of affine.for / scf.for nests.
     (2) Move top-level ops before the first affine.for when dependency-safe (fusion preprocess).
   }];
+  let options = [
+    Option<"hoistForall", "hoist-forall", "bool", /*default=*/"true",
+           "Also hoist out of scf.forall loops. Keep enabled for the BiShengIR pipeline (retains the behavior of the former mapped scf.for loops); the emitpy pipeline disables it so tile values stay inside the pypto.spmd scope.">,
+  ];
   let constructor = "mlir::createHoistLoopIndependentOpsPass()";
 }
 

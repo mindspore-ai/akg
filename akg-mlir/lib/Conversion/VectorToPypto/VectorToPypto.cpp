@@ -16,6 +16,8 @@
 
 #include "akg/Conversion/VectorToPypto/VectorToPypto.h"
 
+#include <algorithm>
+#include <functional>
 #include <iomanip>
 #include <iterator>
 #include <mutex>
@@ -246,23 +248,71 @@ static Value createTmpTile(ConversionPatternRewriter &rewriter, Location loc, Ar
 
 static std::optional<SmallVector<int64_t>> tileAllocationShape(Value v, unsigned depth = 0);
 
-/// Statically-known bounds (`maxSizes`/`paddedShapes`) padded to whole
-/// 32-byte rows the way the allocation will be; fails when a bound is
-/// dynamic or the arity does not match the type's rank.
-static std::optional<SmallVector<int64_t>> alignAllocationBounds(Type type, ValueRange bounds) {
+/// One partial reduction a tile flows into: the axes that survive the
+/// fold must carry whole 32-byte rows in the reduction's result dtype
+/// (the output tile is laid out `[rows, 1]` col-major or `[1, cols]`
+/// row-major, so a surviving axis becomes the contiguous one), so the
+/// chain's allocation pads those axes by the result's element size
+/// instead of the tile's own -- cross-dtype chains then agree on one
+/// padded extent at their combining ops.
+struct ReductionAxisPad {
+  SmallVector<unsigned> axes;
+  unsigned resultElemBytes = 0;
+};
+
+/// Forward walk from a tile value through the allocation-keeping
+/// element-wise chain collecting every partial reduction it reaches;
+/// see the definition below `keepsOperandAllocation`. Cycle-safe like
+/// `collectSiblingAllocationBounds` below: merge edges between the
+/// operands they combine form cycles a plain recursion never exits.
+static void collectReductionAxisPadsImpl(Value v, unsigned depth, SmallVectorImpl<ReductionAxisPad> &pads,
+                                          DenseSet<Value> &visited);
+static void collectReductionAxisPads(Value v, unsigned depth, SmallVectorImpl<ReductionAxisPad> &pads);
+
+/// The allocation extent for one tile axis: the contiguous (last) axis
+/// pads to whole 32-byte rows in the tile's own dtype, and an axis that
+/// survives a downstream partial reduction pads to whole rows in that
+/// reduction's result dtype -- the larger of the two when both apply, so
+/// cross-dtype chains sharing a reduction agree on one extent. Other
+/// leading axes keep their raw extent.
+static int64_t padAllocationExtent(int64_t extent, unsigned axis, unsigned rank, unsigned elemBytes,
+                                   ArrayRef<ReductionAxisPad> pads) {
+  int64_t aligned = extent;
+  if (axis + 1 == rank && elemBytes) {
+    aligned = alignExtentTo32B(aligned, elemBytes);
+  }
+  for (const auto &pad : pads) {
+    if (llvm::is_contained(pad.axes, axis) && pad.resultElemBytes) {
+      aligned = std::max(aligned, alignExtentTo32B(aligned, pad.resultElemBytes));
+    }
+  }
+  return aligned;
+}
+
+/// Statically-known bounds (`maxSizes`/`paddedShapes`) with the
+/// contiguous (last) axis and any reduction-surviving axis padded to
+/// whole 32-byte rows the way the allocation will be; fails when a
+/// bound is dynamic or the arity does not match the type's rank.
+static std::optional<SmallVector<int64_t>> alignAllocationBounds(Value result, Type type, ValueRange bounds) {
   auto shaped = dyn_cast<ShapedType>(type);
   if (!shaped || bounds.size() != static_cast<size_t>(shaped.getRank())) {
     return std::nullopt;
   }
   unsigned elemBytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
+  SmallVector<ReductionAxisPad> pads;
+  collectReductionAxisPads(result, 0, pads);
   SmallVector<int64_t> aligned;
   aligned.reserve(bounds.size());
-  for (Value bound : bounds) {
+  for (auto [index, bound] : llvm::enumerate(bounds)) {
     auto value = constIndexValue(bound);
     if (!value) {
       return std::nullopt;
     }
-    aligned.push_back(alignExtentTo32B(*value, elemBytes));
+    // Only the contiguous axis and the reduction-surviving axes carry
+    // whole-32-byte-row padding, mirroring what the allocation sites
+    // do; other leading axes keep their raw bounds so cross-dtype
+    // tiles with equal extents stay shape-compatible.
+    aligned.push_back(padAllocationExtent(*value, index, bounds.size(), elemBytes, pads));
   }
   return aligned;
 }
@@ -271,7 +321,7 @@ static std::optional<SmallVector<int64_t>> alignAllocationBounds(Type type, Valu
 /// surviving axes: the folded axis is 1 in the keepdim form, or dropped
 /// by the incremental lowering's rank-reduced form.
 static std::optional<SmallVector<int64_t>> allocationShapeOfReduction(Value result, pypto::ReductionOp reduction,
-                                                                     unsigned depth) {
+                                                                      unsigned depth) {
   auto bounds = tileAllocationShape(reduction.getVector(), depth + 1);
   auto shaped = dyn_cast<ShapedType>(result.getType());
   if (!bounds || !shaped) {
@@ -307,15 +357,16 @@ static std::optional<SmallVector<int64_t>> allocationShapeOfLoopResult(Value v, 
 /// allocation stays the operand's. Both the unconverted and the pypto
 /// forms appear because patterns run in arbitrary order.
 static bool keepsOperandAllocation(Operation *def) {
-  if (isa<pypto::AddOp, pypto::SubOp, pypto::MulOp, pypto::DivOp, pypto::MaximumOp, pypto::MinimumOp, pypto::CastOp,
-          pypto::AbsOp, pypto::ExpOp, pypto::LogOp, pypto::SqrtOp, pypto::RsqrtOp, pypto::SinOp, pypto::CosOp,
-          arith::AddIOp, arith::AddFOp, arith::MulIOp, arith::MulFOp, arith::SubIOp, arith::SubFOp, arith::DivSIOp,
-          arith::DivUIOp, arith::DivFOp, arith::MaxSIOp, arith::MinSIOp, arith::ExtFOp, arith::TruncFOp,
-          arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp, arith::SIToFPOp, arith::UIToFPOp, arith::FPToSIOp,
-          arith::FPToUIOp, npuvector::ExtFOp, npuvector::TruncFOp, npuvector::ExtSIOp, npuvector::ExtUIOp,
-          npuvector::TruncIOp, npuvector::SIToFPOp, npuvector::UIToFPOp, npuvector::FPToSIOp, npuvector::FPToUIOp,
-          math::AbsFOp, math::ExpOp, math::LogOp, math::SqrtOp, math::RsqrtOp, math::SinOp, math::CosOp,
-          math::RoundOp, math::FloorOp, math::CeilOp>(def)) {
+  if (isa<pypto::AddOp, pypto::SubOp, pypto::MulOp, pypto::DivOp, pypto::MaximumOp, pypto::MinimumOp,
+          pypto::MaximumsOp, pypto::MinimumsOp, pypto::CastOp, pypto::AbsOp, pypto::ExpOp, pypto::LogOp,
+          pypto::SqrtOp, pypto::RsqrtOp, pypto::RecipOp, pypto::NegOp, pypto::SinOp, pypto::CosOp, arith::AddIOp,
+          arith::AddFOp, arith::MulIOp, arith::MulFOp, arith::SubIOp, arith::SubFOp, arith::DivSIOp, arith::DivUIOp,
+          arith::DivFOp, arith::MaxSIOp, arith::MinSIOp, arith::ExtFOp, arith::TruncFOp, arith::NegFOp, arith::ExtSIOp,
+          arith::ExtUIOp, arith::TruncIOp, arith::SIToFPOp, arith::UIToFPOp, arith::FPToSIOp, arith::FPToUIOp,
+          npuvector::ExtFOp, npuvector::TruncFOp, npuvector::ExtSIOp, npuvector::ExtUIOp, npuvector::TruncIOp,
+          npuvector::SIToFPOp, npuvector::UIToFPOp, npuvector::FPToSIOp, npuvector::FPToUIOp, math::AbsFOp, math::ExpOp,
+          math::LogOp, math::SqrtOp, math::RsqrtOp, math::SinOp, math::CosOp, math::RoundOp, math::FloorOp,
+          math::CeilOp>(def)) {
     return true;
   }
   // Selects and comparisons keep the operands' allocation too: a dynamic
@@ -325,17 +376,550 @@ static bool keepsOperandAllocation(Operation *def) {
              arith::MaximumFOp, arith::MinimumFOp>(def);
 }
 
-/// The first shaped operand with a resolvable allocation shape.
+/// The result element size of a cast-family op (nullopt when `op` is
+/// not one): an element-wise cast keeps the operand's allocation while
+/// re-typing it, so the allocation must span whole 32-byte rows in the
+/// cast's result dtype too -- an extent padded for the tile's own
+/// 8-byte elements (140 rows = 1120B, on the grid) misses the grid once
+/// the chain casts down to 4-byte elements (560B). Both the unconverted
+/// arith / npuvector and the converted pypto spellings appear because
+/// patterns run in arbitrary order.
+static std::optional<unsigned> castResultElemBytes(Operation *op) {
+  if (!isa<arith::ExtFOp, arith::TruncFOp, arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp, arith::SIToFPOp,
+           arith::UIToFPOp, arith::FPToSIOp, arith::FPToUIOp, npuvector::ExtFOp, npuvector::TruncFOp,
+           npuvector::ExtSIOp, npuvector::ExtUIOp, npuvector::TruncIOp, npuvector::SIToFPOp, npuvector::UIToFPOp,
+           npuvector::FPToSIOp, npuvector::FPToUIOp, pypto::CastOp>(op)) {
+    return std::nullopt;
+  }
+  auto shaped = dyn_cast<ShapedType>(op->getResult(0).getType());
+  if (!shaped) {
+    return std::nullopt;
+  }
+  unsigned bytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
+  return bytes ? std::optional<unsigned>(bytes) : std::nullopt;
+}
+
+/// Forward walk from a tile value collecting the narrowest result dtype
+/// width a cast chain downstream of it produces, or nullopt when no cast
+/// consumes the chain. A cast keeps the source tile's allocation while
+/// re-typing it (the frontend's `DeduceTileCastType`), so an allocation
+/// padded for one dtype must stay 32-byte aligned at every narrower dtype
+/// the chain later narrows to: a full allocated as INT32 over [2704] lays
+/// aligned rows, yet the FP16-then-INT8 casts consuming it inherit
+/// 2704-byte INT8 rows, which `pto.alloc_tile` rejects. The walk falls
+/// through casts the way the reduction-axis one does, over the same
+/// `keepsOperandAllocation` chain; depth-limited and cycle-guarded the
+/// same way too.
+static void collectCastChainMinElemBytesImpl(Value v, unsigned depth, std::optional<unsigned> &minBytes,
+                                             DenseSet<Value> &visited) {
+  if (depth > 256) {
+    return;
+  }
+  if (!visited.insert(v).second) {
+    return;
+  }
+  for (Operation *user : v.getUsers()) {
+    if (auto bytes = castResultElemBytes(user)) {
+      if (!minBytes || *bytes < *minBytes) {
+        minBytes = bytes;
+      }
+    }
+    if (keepsOperandAllocation(user)) {
+      for (Value result : user->getResults()) {
+        collectCastChainMinElemBytesImpl(result, depth + 1, minBytes, visited);
+      }
+    }
+  }
+}
+
+static std::optional<unsigned> castChainMinElemBytes(Value v) {
+  std::optional<unsigned> minBytes;
+  DenseSet<Value> visited;
+  collectCastChainMinElemBytesImpl(v, 0, minBytes, visited);
+  return minBytes;
+}
+
+/// Collects the pad an unconverted partial reduction's output tile
+/// allocation demands. `reduction_dims` names the one folded axis (the
+/// first or the last, the restriction `rewritePartialReduction` imposes);
+/// a full reduction yields a scalar, so no output tile allocation exists
+/// to align.
+static void collectNpuReductionPad(npuvector::ReductionOp reduction, SmallVectorImpl<ReductionAxisPad> &pads) {
+  auto dims = reduction.getReductionDims();
+  auto inputType = dyn_cast<ShapedType>(reduction.getVector().getType());
+  auto resultType = dyn_cast<ShapedType>(reduction->getResult(0).getType());
+  if (!dims || dims->size() != 1 || !inputType || inputType.getRank() < 2 || !resultType) {
+    return;
+  }
+  ReductionAxisPad pad;
+  unsigned rank = inputType.getRank();
+  int64_t dim = (*dims)[0];
+  if (dim == static_cast<int64_t>(rank - 1)) {
+    // row: fold the last axis, every leading axis survives.
+    for (unsigned axis = 0; axis + 1 < rank; ++axis) {
+      pad.axes.push_back(axis);
+    }
+  } else if (dim == 0) {
+    // col: fold the first axis, every trailing axis survives.
+    for (unsigned axis = 1; axis < rank; ++axis) {
+      pad.axes.push_back(axis);
+    }
+  } else {
+    return;
+  }
+  pad.resultElemBytes = resultType.getElementType().getIntOrFloatBitWidth() / 8;
+  if (pad.resultElemBytes) {
+    pads.push_back(std::move(pad));
+  }
+}
+
+/// Collects the pad a converted partial reduction's output tile allocation
+/// demands: `axis` already spells row (fold the last axis) or col (fold the
+/// first axis).
+static void collectPyptoReductionPad(pypto::ReductionOp reduction, SmallVectorImpl<ReductionAxisPad> &pads) {
+  auto inputType = dyn_cast<ShapedType>(reduction.getVector().getType());
+  auto resultType = dyn_cast<ShapedType>(reduction->getResult(0).getType());
+  if (!inputType || inputType.getRank() < 2 || !resultType) {
+    return;
+  }
+  ReductionAxisPad pad;
+  unsigned rank = inputType.getRank();
+  if (reduction.getAxis() == pypto::ReduceAxis::row) {
+    for (unsigned axis = 0; axis + 1 < rank; ++axis) {
+      pad.axes.push_back(axis);
+    }
+  } else {
+    for (unsigned axis = 1; axis < rank; ++axis) {
+      pad.axes.push_back(axis);
+    }
+  }
+  pad.resultElemBytes = resultType.getElementType().getIntOrFloatBitWidth() / 8;
+  if (pad.resultElemBytes) {
+    pads.push_back(std::move(pad));
+  }
+}
+
+/// Forward walk from a tile value collecting every partial reduction it
+/// flows into, through the element-wise/cast/select chain whose
+/// allocation the tile keeps (`keepsOperandAllocation`). Both the
+/// unconverted and the pypto reduction forms appear because patterns run
+/// in arbitrary order. Any other consumer breaks the allocation chain --
+/// the same ops `tileAllocationShape` refuses -- so the walk stops there
+/// and the value stays unpadded; depth-limited like `tileAllocationShape`.
+/// The value may reach a reduction as its vector operand or (on the
+/// unconverted form) its accumulator: both combine into the reduction's
+/// output tile, so both must carry the padded surviving axes.
+static void collectReductionAxisPadsImpl(Value v, unsigned depth, SmallVectorImpl<ReductionAxisPad> &pads,
+                                          DenseSet<Value> &visited) {
+  // The budget must span the fused element-wise chains a scheduler emits:
+  // a 50-input fused sum is ~55 keepsOperandAllocation hops from its head
+  // reads to the loop-carried partial reduction, and any budget that cuts
+  // the walk short leaves the mid-chain reads unpadded, mismatching the
+  // padded tail at compile time. The chain stays linear in practice (one
+  // user per link), so the headroom costs little.
+  if (depth > 256 || !isa<ShapedType>(v.getType())) {
+    return;
+  }
+  // Merge edges form cycles between the operands they combine (each
+  // operand's walk reaches the other) and diamonds through shared
+  // results, so a plain recursion revisits values forever. The pads
+  // merge is a per-axis max, so one visit per value is enough.
+  if (!visited.insert(v).second) {
+    return;
+  }
+  for (Operation *user : v.getUsers()) {
+    if (auto reduction = dyn_cast<npuvector::ReductionOp>(user)) {
+      collectNpuReductionPad(reduction, pads);
+      continue;
+    }
+    if (auto reduction = dyn_cast<pypto::ReductionOp>(user)) {
+      collectPyptoReductionPad(reduction, pads);
+      continue;
+    }
+    // An element-wise cast re-types the tile while keeping its
+    // allocation, so the allocation must also satisfy the 32-byte grid
+    // in the cast's result dtype: the contiguous axis carries that
+    // requirement the same way it carries the tile's own row padding
+    // and a reduction survivor's -- cross-dtype chains then agree on
+    // one extent (144 rows is 1152B in int64 and 576B in fp32, whole
+    // 32-byte rows on both grids; 140 is 1120B and 560B, the latter
+    // off the fp32 grid). The walk falls through: a cast keeps the
+    // allocation, so deeper casts and reductions still collect.
+    if (auto castBytes = castResultElemBytes(user)) {
+      auto shaped = dyn_cast<ShapedType>(v.getType());
+      if (shaped && shaped.getRank() > 0) {
+        ReductionAxisPad pad;
+        pad.axes.push_back(shaped.getRank() - 1);
+        pad.resultElemBytes = *castBytes;
+        pads.push_back(std::move(pad));
+      }
+    }
+    if (keepsOperandAllocation(user)) {
+      for (Value result : user->getResults()) {
+        collectReductionAxisPadsImpl(result, depth + 1, pads, visited);
+      }
+    }
+  }
+}
+
+static void collectReductionAxisPads(Value v, unsigned depth, SmallVectorImpl<ReductionAxisPad> &pads) {
+  DenseSet<Value> visited;
+  collectReductionAxisPadsImpl(v, depth, pads, visited);
+}
+
+/// Whether a user keeps the sibling-bounds walk alive: element-wise
+/// allocation keepers plus the expand family, whose result keeps the tile
+/// operand's allocation; partial reductions, whose vector and accumulator
+/// operands combine into one output tile (so those operands are siblings
+/// of each other -- a workspace accumulator read must cover the padded
+/// input tile it merges with, an fp32 [6280] accumulator against a bf16
+/// [6288] row -- and the result keeps the merged allocation; both the
+/// unconverted and the pypto spellings appear because patterns run in
+/// arbitrary order); and slices/merges, which keep the walk alive the
+/// same way: an extract_slice result windows the source's allocation, so
+/// a downstream merge it reaches still names the extent the source tile
+/// must carry (a workspace read sliced onto the elementwise max with a
+/// padded bf16 row inherits that row's bound), and an insert_slice
+/// writes one shaped operand into the other's allocation, so the two
+/// tiles must agree on one padded extent. Only the walk traverses them:
+/// `tileAllocationShape` still refuses slices because a slice result
+/// genuinely carries the smaller window, not the source's full
+/// allocation.
+static bool keepsSiblingWalkAlive(Operation *user) {
+  return keepsOperandAllocation(user) ||
+         isa<pypto::RowExpandAddOp, pypto::RowExpandSubOp, pypto::RowExpandMulOp, pypto::RowExpandDivOp,
+             pypto::ColExpandAddOp, pypto::ColExpandSubOp, pypto::ColExpandMulOp, pypto::ColExpandDivOp>(user) ||
+         isa<npuvector::ReductionOp, pypto::ReductionOp>(user) ||
+         isa<npuvector::ExtractSliceOp, npuvector::InsertSliceOp, pypto::SliceOp>(user);
+}
+
+/// Forward walk from a tile value through the allocation-keeping chain
+/// (`keepsOperandAllocation` plus the expand family, whose result keeps
+/// the tile operand's allocation), aggregating per axis the allocation
+/// of every sibling operand the chain merges with: PTOAS lays every tile
+/// in the block onto one grid, so a read whose own chain carries no
+/// reduction pad must still cover the allocation of the tiles it
+/// combines with downstream -- e.g. the [8,*] a reduction-padded
+/// sibling carries -- or the combine mismatches at compile time
+/// ([7,*] vs [8,*]). Mirrors the sibling query `buildBroadcastExtents`
+/// makes on a broadcast's direct consumers, but penetrates the chain
+/// because a read's merge happens hops downstream. `siblingBounds`
+/// stays empty until a static sibling bound appears; dynamic slots keep
+/// the sentinel and never lower a bound.
+static void collectSiblingAllocationBoundsImpl(Value v, unsigned depth, SmallVectorImpl<int64_t> &siblingBounds,
+                                               DenseSet<Value> &visited) {
+  auto shaped = dyn_cast<ShapedType>(v.getType());
+  // The same long-chain headroom `collectReductionAxisPads` needs: this
+  // cascade is what carries a reduction pad back up a fused chain past
+  // the distance a direct reduction query covers, and a walk that stops
+  // mid-chain leaves the head reads at the unpadded bound while the tail
+  // already carries the padded one.
+  if (depth > 256 || !shaped) {
+    return;
+  }
+  // Merge edges form cycles between the operands they combine (each
+  // operand's walk reaches the other), and diamonds through shared
+  // results, so a plain recursion revisits values forever. The bounds
+  // merge is a per-axis max, so one visit per value is enough.
+  if (!visited.insert(v).second) {
+    return;
+  }
+  unsigned rank = shaped.getRank();
+  for (Operation *user : v.getUsers()) {
+    if (!keepsSiblingWalkAlive(user)) {
+      continue;
+    }
+    for (Value operand : user->getOperands()) {
+      if (operand == v || !isa<ShapedType>(operand.getType())) {
+        continue;
+      }
+      auto shape = tileAllocationShape(operand, 1);
+      if (shape && shape->size() == rank) {
+        if (siblingBounds.empty()) {
+          siblingBounds.assign(rank, ShapedType::kDynamic);
+        }
+        for (unsigned axis = 0; axis < rank; ++axis) {
+          if (ShapedType::isDynamic((*shape)[axis])) {
+            continue;
+          }
+          siblingBounds[axis] =
+            ShapedType::isDynamic(siblingBounds[axis]) ? (*shape)[axis] : std::max(siblingBounds[axis], (*shape)[axis]);
+        }
+      }
+      // The backward query above only resolves the sibling's own
+      // intrinsic boundary (a still-unconverted read pads from its
+      // element size alone: fp32 104x4B already fills whole rows), but
+      // that sibling's allocation is itself the merge of *its* further
+      // siblings -- the [112] a head read carries comes from the
+      // reduction result it merges with on another edge, which a plain
+      // backward query never sees. Walk the sibling transitively so
+      // the merge chain (read --mulf-- read --mulf-- reduction result)
+      // propagates that bound all the way to the head.
+      if (cast<ShapedType>(operand.getType()).getRank() == rank) {
+        collectSiblingAllocationBoundsImpl(operand, depth + 1, siblingBounds, visited);
+      }
+    }
+    for (Value result : user->getResults()) {
+      collectSiblingAllocationBoundsImpl(result, depth + 1, siblingBounds, visited);
+    }
+  }
+}
+
+static void collectSiblingAllocationBounds(Value v, unsigned depth, SmallVectorImpl<int64_t> &siblingBounds) {
+  DenseSet<Value> visited;
+  collectSiblingAllocationBoundsImpl(v, depth, siblingBounds, visited);
+}
+
+/// The reads a backward allocation query is currently sibling-merging.
+/// A read's sibling walk queries its merge siblings backward, and those
+/// queries can land on reads whose own sibling walks reach back -- two
+/// reads merged at one elementwise op reach each other through both
+/// directions -- so an unguarded sibling merge recurses forever, and
+/// letting every read the walk touches start its own walk multiplies the
+/// query count per level. While any merge is in flight the queries it
+/// issues resolve their intrinsic bounds only; the walk still collects
+/// every other edge (transitively through the merge chain) it needs.
+static DenseSet<Value> &activeSiblingQueryReads() {
+  static thread_local DenseSet<Value> active;
+  return active;
+}
+
+/// Merges the sibling bounds a read's own conversion pads it with into a
+/// backward query that lands on it. `rewriteDynamicRead`/`rewriteDynamicLoad`
+/// allocate the tile at its intrinsic 32-byte-aligned bound merged with the
+/// allocation of every sibling its chain combines with downstream, so a
+/// backward query that resolves only the intrinsic boundary (a fp32 read
+/// whose 104x4B row already fills whole rows) under-reports what the final
+/// program allocates -- the padded [112] a merge consumer or a lifted
+/// broadcast reshape must spell.
+static std::optional<SmallVector<int64_t>> mergeSiblingAllocationBounds(Value v, unsigned depth,
+                                                                        std::optional<SmallVector<int64_t>> bounds) {
+  if (!bounds) {
+    return bounds;
+  }
+  DenseSet<Value> &active = activeSiblingQueryReads();
+  if (!active.empty()) {
+    return bounds;
+  }
+  active.insert(v);
+  SmallVector<int64_t> siblingBounds;
+  collectSiblingAllocationBounds(v, depth, siblingBounds);
+  active.erase(v);
+  if (siblingBounds.empty() || siblingBounds.size() != bounds->size()) {
+    return bounds;
+  }
+  for (unsigned axis = 0; axis < bounds->size(); ++axis) {
+    if (ShapedType::isDynamic(siblingBounds[axis]) || siblingBounds[axis] <= (*bounds)[axis]) {
+      continue;
+    }
+    (*bounds)[axis] = siblingBounds[axis];
+  }
+  return bounds;
+}
+
+/// The per-axis largest allocation shape across the resolvable shaped
+/// operands, or the first resolvable one when ranks disagree. Merging
+/// rather than returning the first hit matters at element-wise merge
+/// points: PTOAS runs the whole block on one grid, so the result's
+/// allocation must cover every operand tile (e.g. an already padded bf16
+/// load combined with an f32 load that pads later in conversion order).
 static std::optional<SmallVector<int64_t>> allocationShapeFromOperands(Operation *def, unsigned depth) {
-  for (Value operand : def->getOperands()) {
+  std::optional<SmallVector<int64_t>> merged;
+  // A select's condition never feeds the result's data: the frontend
+  // (DeduceTileSelectType) takes the result's shape and valid extents
+  // from the value operands only, so the mask's padded allocation must
+  // not enlarge the merged result.
+  bool skipCond = isa<pypto::SelectOp, npuvector::SelectOp, arith::SelectOp>(def);
+  for (auto [index, operand] : llvm::enumerate(def->getOperands())) {
+    if (skipCond && index == 0) {
+      continue;
+    }
     if (!isa<ShapedType>(operand.getType())) {
       continue;
     }
-    if (auto bounds = tileAllocationShape(operand, depth + 1)) {
-      return bounds;
+    auto bounds = tileAllocationShape(operand, depth + 1);
+    if (!bounds) {
+      continue;
+    }
+    if (!merged) {
+      merged = bounds;
+      continue;
+    }
+    if (merged->size() != bounds->size()) {
+      continue;
+    }
+    for (unsigned axis = 0; axis < merged->size(); ++axis) {
+      if (ShapedType::isDynamic((*bounds)[axis])) {
+        continue;
+      }
+      (*merged)[axis] =
+        ShapedType::isDynamic((*merged)[axis]) ? (*bounds)[axis] : std::max((*merged)[axis], (*bounds)[axis]);
     }
   }
-  return std::nullopt;
+  return merged;
+}
+
+/// The allocation a `pypto.load` names: the padded bounds it spells,
+/// projected back onto the tile's rank when the load is rank-reduced.
+static std::optional<SmallVector<int64_t>> loadAllocationShape(Value v, pypto::LoadOp load, unsigned depth) {
+  // A rank-reduced load spells its padded bounds in the source's
+  // coordinate system -- one entry per source dimension, every
+  // dropped dimension spanning a single element padded and valid
+  // alike (`rewritePaddedStaticRead`) -- so a query typed against
+  // the tile's own rank projects the bounds back before aligning:
+  // the mapped dimensions carry the tile's valid extents in tile
+  // order, and the dropped unit dimensions fall out. Without the
+  // projection the arity check inside `alignAllocationBounds`
+  // rejects the bounds and the query degrades to the caller's
+  // valid-extent fallback (8 instead of the padded 16 a bf16 row
+  // allocates), misspelling the reshape a broadcast lift builds.
+  ValueRange bounds = load.getPaddedShapes();
+  auto shaped = dyn_cast<ShapedType>(v.getType());
+  if (shaped && shaped.hasStaticShape() && bounds.size() > static_cast<size_t>(shaped.getRank()) &&
+      load.getValidExtents().size() == bounds.size()) {
+    SmallVector<Value> projected;
+    size_t axis = 0;
+    bool matched = true;
+    for (auto [padded, valid] : llvm::zip(bounds, load.getValidExtents())) {
+      if (axis < static_cast<size_t>(shaped.getRank())) {
+        auto extent = constIndexValue(valid);
+        if (extent && *extent == shaped.getDimSize(axis)) {
+          projected.push_back(padded);
+          ++axis;
+          continue;
+        }
+      }
+      auto unit = constIndexValue(padded);
+      if (unit && *unit == 1) {
+        continue;
+      }
+      matched = false;
+      break;
+    }
+    if (matched && axis == static_cast<size_t>(shaped.getRank())) {
+      return mergeSiblingAllocationBounds(v, depth, alignAllocationBounds(v, v.getType(), ValueRange(projected)));
+    }
+  }
+  return mergeSiblingAllocationBounds(v, depth, alignAllocationBounds(v, v.getType(), bounds));
+}
+
+/// The allocation an `npuvector.broadcast` names, resolving a specialized
+/// lift broadcast's identity-mapped axis through the source allocation.
+static std::optional<SmallVector<int64_t>> broadcastAllocationShape(Value v, npuvector::BroadcastOp broadcast,
+                                                                   unsigned depth) {
+  // A specialized lift broadcast (rank-1 source lifted along one axis
+  // onto a rank-2 result) materializes its identity-mapped axis from
+  // the source allocation: the conversion reshapes the source chain
+  // into [rows, 1]/[1, cols] with the extent `tileAllocationShape`
+  // resolves on the source, so that axis carries the source's padded
+  // allocation (140 where a 139-element load pads to whole 32-byte
+  // rows) while the raw `maxSizes` bound stays unpadded. Resolve the
+  // identity axis through the source when it has a static
+  // allocation, so a query landing on an unconverted lift -- e.g. a
+  // sibling constant broadcast materializing before the lift itself
+  // converts -- names the allocation the expand family produces
+  // instead of the smaller bound. Other axes keep the `maxSizes`
+  // spelling padded the usual way.
+  ArrayRef<int64_t> dimension = broadcast.getDimension();
+  auto shaped = dyn_cast<ShapedType>(v.getType());
+  auto srcType = dyn_cast<ShapedType>(broadcast.getSource().getType());
+  // A scalar-source broadcast splats a rank-0 value across the result
+  // and materializes no buffer of its own: the conversion folds it
+  // back into a scalar operand of the consuming elementwise op, so
+  // its `maxSizes` spell valid bounds rather than an allocation.
+  // Resolving here would let `allocationShapeFromOperands` stop at
+  // this operand and never reach the sibling that actually allocates
+  // (an extf -> rank-reduced-load chain carrying padded bounds).
+  // Decline so the query falls through to a real allocation source.
+  if (!srcType || srcType.getRank() == 0) {
+    return std::nullopt;
+  }
+  ValueRange maxSizes = broadcast.getMaxSizes();
+  if (shaped && shaped.getRank() == 2 && srcType && srcType.getRank() == 1 && dimension.size() == 1 &&
+      (dimension[0] == 0 || dimension[0] == 1) && maxSizes.size() == 2) {
+    if (auto srcAlloc = tileAllocationShape(broadcast.getSource(), depth + 1); srcAlloc && srcAlloc->size() == 1) {
+      unsigned identity = dimension[0] == 0 ? 0 : 1;
+      unsigned elemBytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
+      SmallVector<ReductionAxisPad> pads;
+      collectReductionAxisPads(v, 0, pads);
+      SmallVector<int64_t> aligned;
+      aligned.reserve(maxSizes.size());
+      for (auto [index, bound] : llvm::enumerate(maxSizes)) {
+        auto value = constIndexValue(bound);
+        if (!value) {
+          return std::nullopt;
+        }
+        if (index == identity) {
+          value = (*srcAlloc)[0];
+        }
+        aligned.push_back(padAllocationExtent(*value, index, maxSizes.size(), elemBytes, pads));
+      }
+      return aligned;
+    }
+  }
+  return alignAllocationBounds(v, v.getType(), broadcast.getMaxSizes());
+}
+
+/// The allocation an extent-spelling op (`pypto.tile_full` /
+/// `pypto.reshape`) names: a statically shaped result carries no extents
+/// and names its own shape, while the per-dimension spelling covers every
+/// axis.
+static std::optional<SmallVector<int64_t>> extentListAllocationShape(Value v, ValueRange extents) {
+  auto shaped = dyn_cast<ShapedType>(v.getType());
+  if (shaped && shaped.hasStaticShape() && extents.empty()) {
+    return SmallVector<int64_t>(shaped.getShape());
+  }
+  if (!shaped || extents.size() != static_cast<size_t>(shaped.getRank())) {
+    return std::nullopt;
+  }
+  SmallVector<int64_t> shape;
+  for (Value extent : extents) {
+    auto bound = constIndexValue(extent);
+    if (!bound) {
+      return std::nullopt;
+    }
+    shape.push_back(*bound);
+  }
+  return shape;
+}
+
+/// The allocation an unconverted partial reduction's result keeps on the
+/// surviving axes, mirroring `allocationShapeOfReduction` for the form
+/// `rewritePartialReduction` later produces.
+static std::optional<SmallVector<int64_t>> npuReductionAllocationShape(Value v, npuvector::ReductionOp reduction,
+                                                                      unsigned depth) {
+  auto shaped = dyn_cast<ShapedType>(v.getType());
+  auto dims = reduction.getReductionDims();
+  auto inputShaped = dyn_cast<ShapedType>(reduction.getVector().getType());
+  if (!shaped || shaped.getRank() == 0 || !dims || dims->size() != 1 || !inputShaped || inputShaped.getRank() < 2) {
+    // Full reductions (scalar results), multi-axis and inner-axis
+    // reductions never map onto a partial row/col reduction.
+    return std::nullopt;
+  }
+  auto bounds = tileAllocationShape(reduction.getVector(), depth + 1);
+  if (!bounds || bounds->size() != static_cast<size_t>(inputShaped.getRank())) {
+    return std::nullopt;
+  }
+  int64_t dim = (*dims)[0];
+  // `rewritePartialReduction` maps only the first/last axis onto
+  // pl.row_* / pl.col_*: row folds the last axis, col the first.
+  size_t folded;
+  if (dim == static_cast<int64_t>(inputShaped.getRank()) - 1) {
+    folded = bounds->size() - 1;
+  } else if (dim == 0) {
+    folded = 0;
+  } else {
+    return std::nullopt;
+  }
+  SmallVector<int64_t> kept(*bounds);
+  if (shaped.getRank() == static_cast<int64_t>(bounds->size())) {
+    kept[folded] = 1;
+  } else if (shaped.getRank() + 1 == static_cast<int64_t>(bounds->size())) {
+    kept.erase(kept.begin() + folded);
+  } else {
+    return std::nullopt;
+  }
+  return kept;
 }
 
 /// The statically allocatable shape covering a tile: static dims stay and
@@ -344,7 +928,14 @@ static std::optional<SmallVector<int64_t>> allocationShapeFromOperands(Operation
 /// Element-wise users, casts and loop-carried accumulators keep the
 /// allocation of the read they combine.
 static std::optional<SmallVector<int64_t>> tileAllocationShape(Value v, unsigned depth) {
-  if (depth > 16) {
+  // The budget covers the long element-wise chains a sibling query walks:
+  // a polynomial (sin/cos Taylor) between a broadcast's consumer and the
+  // load/carrier that carries the padded allocation spans dozens of
+  // keepsOperandAllocation hops, and cutting the walk short leaves the
+  // broadcast spelling the unpadded bound. The recursion stays linear in
+  // practice -- `allocationShapeFromOperands` returns the first operand
+  // that resolves -- so the headroom costs little.
+  if (depth > 64) {
     return std::nullopt;
   }
   // Loop-carried tiles: an scf.for result keeps the allocation of the
@@ -362,16 +953,40 @@ static std::optional<SmallVector<int64_t>> tileAllocationShape(Value v, unsigned
     return std::nullopt;
   }
   if (auto read = dyn_cast<npuvector::TransferReadOp>(def)) {
-    return alignAllocationBounds(v.getType(), read.getMaxSizes());
+    return mergeSiblingAllocationBounds(v, depth, alignAllocationBounds(v, v.getType(), read.getMaxSizes()));
   }
   if (auto load = dyn_cast<pypto::LoadOp>(def)) {
-    return alignAllocationBounds(v.getType(), load.getPaddedShapes());
+    return loadAllocationShape(v, load, depth);
   }
   if (auto broadcast = dyn_cast<npuvector::BroadcastOp>(def)) {
-    return alignAllocationBounds(v.getType(), broadcast.getMaxSizes());
+    return broadcastAllocationShape(v, broadcast, depth);
+  }
+  if (auto full = dyn_cast<pypto::TileFullOp>(def)) {
+    // A materialized carrier or constant allocates exactly the extents
+    // the broadcast that created it spelled -- the padded bound the
+    // sibling-aware `buildBroadcastExtents` computed. The per-dimension
+    // spelling covers every axis; a statically shaped result carries no
+    // extents and names its own shape.
+    return extentListAllocationShape(v, full.getExtents());
+  }
+  if (auto reshape = dyn_cast<pypto::ReshapeOp>(def)) {
+    // `pl.reshape` conserves physical elements, so the view's own
+    // extents name the allocation the source carries: the lifted
+    // [rows, 1]/[1, cols] views spell the source's padded bound (140
+    // when the load padded 139 to whole 32-byte rows).
+    return extentListAllocationShape(v, reshape.getExtents());
+  }
+  if (isa<pypto::RowExpandAddOp, pypto::RowExpandSubOp, pypto::RowExpandMulOp, pypto::RowExpandDivOp,
+          pypto::ColExpandAddOp, pypto::ColExpandSubOp, pypto::ColExpandMulOp, pypto::ColExpandDivOp>(def)) {
+    // The runtime broadcasts the vector onto the tile, so an expand's
+    // result keeps the tile operand's allocation.
+    return tileAllocationShape(def->getOperand(0), depth + 1);
   }
   if (auto reduction = dyn_cast<pypto::ReductionOp>(def)) {
     return allocationShapeOfReduction(v, reduction, depth);
+  }
+  if (auto reduction = dyn_cast<npuvector::ReductionOp>(def)) {
+    return npuReductionAllocationShape(v, reduction, depth);
   }
   if (auto loop = dyn_cast<scf::ForOp>(def)) {
     return allocationShapeOfLoopResult(v, loop, depth);
@@ -388,7 +1003,31 @@ static Value reshapeTileOp(ConversionPatternRewriter &rewriter, Location loc, Va
                            Type elemType) {
   assert(pyptoDtypeName(elemType) && "caller validated the element type");
   return rewriter.create<pypto::ReshapeOp>(
-    loc, pypto::TileType::get(rewriter.getContext(), elemType, SmallVector<int64_t>{rows, cols}), input);
+    loc, pypto::TileType::get(rewriter.getContext(), elemType, SmallVector<int64_t>{rows, cols}), input, ValueRange(),
+    ValueRange());
+}
+
+/// Views `input` as a `[rows, cols]` tile whose *valid* region is only
+/// `[validRows, validCols]`. The value's own type spells the valid extent,
+/// while the tile allocates wider (32-byte-aligned rows), so a static
+/// result type trips both the IR verifier's element-count check and
+/// `pl.reshape`'s allocated-element conservation. The dynamic result type
+/// keeps the verifier's static check off; the extents spell the physical
+/// allocation and the valid extents spell the valid region, which the
+/// emitpy lowering turns into reshape+slice so the store writes only the
+/// valid elements.
+static Value reshapeTileWithValidOp(ConversionPatternRewriter &rewriter, Location loc, Value input, int64_t rows,
+                                    int64_t cols, int64_t validRows, int64_t validCols, Type elemType) {
+  assert(pyptoDtypeName(elemType) && "caller validated the element type");
+  SmallVector<Value> extents{rewriter.create<arith::ConstantIndexOp>(loc, rows),
+                              rewriter.create<arith::ConstantIndexOp>(loc, cols)};
+  SmallVector<Value> validExtents{rewriter.create<arith::ConstantIndexOp>(loc, validRows),
+                                  rewriter.create<arith::ConstantIndexOp>(loc, validCols)};
+  return rewriter.create<pypto::ReshapeOp>(
+    loc,
+    pypto::TileType::get(rewriter.getContext(), elemType,
+                         SmallVector<int64_t>{ShapedType::kDynamic, ShapedType::kDynamic}),
+    input, ValueRange(extents), ValueRange(validExtents));
 }
 
 //===----------------------------------------------------------------------===//
@@ -508,7 +1147,7 @@ static std::optional<unsigned> cmpTypeCodeFor(arith::CmpFPredicate predicate) {
       // the unordered spellings, which differ from the ordered ones only
       // when an operand is NaN.
       return std::nullopt;
-    }
+  }
 }
 
 /// Finalizes a tile comparison rewrite: `mask` is the freshly built
@@ -536,11 +1175,10 @@ static void replaceWithPackedMask(Operation *replaced, Value mask, ConversionPat
     if (isa<npuvector::BroadcastOp, vector::BroadcastOp>(use.getOwner())) {
       return true;
     }
-    return use.getOperandNumber() == 0 &&
-           isa<arith::SelectOp, npuvector::SelectOp, pypto::SelectOp>(use.getOwner());
+    return use.getOperandNumber() == 0 && isa<arith::SelectOp, npuvector::SelectOp, pypto::SelectOp>(use.getOwner());
   };
-  bool needsUnpack = llvm::any_of(replaced->getResult(0).getUses(),
-                                  [&](OpOperand &use) { return !keepsPackedMask(use); });
+  bool needsUnpack =
+    llvm::any_of(replaced->getResult(0).getUses(), [&](OpOperand &use) { return !keepsPackedMask(use); });
   Type resultType = replaced->getResult(0).getType();
   bool staticShape = false;
   if (auto shaped = dyn_cast<ShapedType>(resultType)) {
@@ -556,18 +1194,22 @@ static void replaceWithPackedMask(Operation *replaced, Value mask, ConversionPat
     // onto i32 itself folds away as a no-op).
     Type elem = rewriter.getI32Type();
     Type unpackType;
+    ArrayRef<int64_t> unpackShape;
     if (auto tile = dyn_cast<pypto::TileType>(resultType)) {
       unpackType = pypto::TileType::get(rewriter.getContext(), elem, tile.getShape());
+      unpackShape = tile.getShape();
     } else if (auto nv = dyn_cast<npuvector::NPUVectorType>(resultType)) {
       unpackType = nv.cloneWith(nv.getShape(), elem);
+      unpackShape = nv.getShape();
     } else {
       auto shaped = cast<ShapedType>(resultType);
       unpackType = VectorType::get(shaped.getShape(), elem);
+      unpackShape = shaped.getShape();
     }
-    Value ones = rewriter.create<pypto::TileFullOp>(loc, unpackType, rewriter.getStringAttr("1"), ValueRange{})
-                   .getResult();
-    Value zeros = rewriter.create<pypto::TileFullOp>(loc, unpackType, rewriter.getStringAttr("0"), ValueRange{})
-                    .getResult();
+    Value ones =
+      rewriter.create<pypto::TileFullOp>(loc, unpackType, rewriter.getStringAttr("1"), ValueRange{}).getResult();
+    Value zeros =
+      rewriter.create<pypto::TileFullOp>(loc, unpackType, rewriter.getStringAttr("0"), ValueRange{}).getResult();
     Value unpacked = rewriter.create<pypto::SelectOp>(loc, unpackType, mask, ones, zeros);
     // Collect the elementwise uses before any rebinding: the rewrite below
     // maps the comparison onto the same-typed mask, so the deferred
@@ -575,8 +1217,7 @@ static void replaceWithPackedMask(Operation *replaced, Value mask, ConversionPat
     // and broadcast sources).
     SmallVector<OpOperand *> unpackUses;
     for (OpOperand &use : replaced->getResult(0).getUses()) {
-      if (!keepsPackedMask(use))
-        unpackUses.push_back(&use);
+      if (!keepsPackedMask(use)) unpackUses.push_back(&use);
     }
     // A replacement whose type differs from the original result never
     // rebinds its uses, so route the comparison through the bare mask and
@@ -584,6 +1225,54 @@ static void replaceWithPackedMask(Operation *replaced, Value mask, ConversionPat
     rewriter.replaceOp(replaced, mask);
     for (OpOperand *use : unpackUses) {
       rewriter.modifyOpInPlace(use->getOwner(), [&]() { use->set(unpacked); });
+    }
+    // The unpacking's consumer chain re-derives its dtype from the select
+    // (a cast onto i32 folds away), and every cast down that chain clones
+    // the select's allocation while re-typing it (`DeduceTileCastType`):
+    // an INT32 unpacking over [2704] whose chain casts to FP16 then INT8
+    // makes the INT8 tile inherit 2704-byte rows, which `pto.alloc_tile`
+    // rejects. Pad the branch fulls' allocation to the narrowest
+    // downstream dtype and trim the valid region back to the source shape,
+    // the same split the select pattern's branch pad spells; the select
+    // output inherits the branches' allocation, so the whole chain stays
+    // row-aligned.
+    int64_t cols = unpackShape.empty() ? 0 : unpackShape.back();
+    if (auto minBytes = castChainMinElemBytes(unpacked)) {
+      if (cols > 0 && (cols * static_cast<int64_t>(*minBytes)) % 32 != 0) {
+        int64_t paddedCols = alignExtentTo32B(cols, *minBytes);
+        auto padBranch = [&](Value full) -> Value {
+          SmallVector<Value> extents;
+          SmallVector<Value> validExtents;
+          for (unsigned axis = 0; axis < unpackShape.size(); ++axis) {
+            int64_t allocation = axis + 1 == unpackShape.size() ? paddedCols : unpackShape[axis];
+            extents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, allocation));
+            validExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, unpackShape[axis]));
+          }
+          // The full spells the padded allocation in its extents while its
+          // result type keeps naming the valid shape, the same split the
+          // sibling-bounds raise on `tile_full` uses; the reshape keeps
+          // that static type too -- the verifiers only check the element
+          // count against the full's own type and the select demands the
+          // branches match its result shape verbatim.
+          auto paddedFull = rewriter.create<pypto::TileFullOp>(
+            loc, unpackType, full.getDefiningOp<pypto::TileFullOp>().getValue(), ValueRange(extents));
+          return rewriter.create<pypto::ReshapeOp>(loc, unpackType, paddedFull, ValueRange(extents),
+                                                   ValueRange(validExtents));
+        };
+        auto select = unpacked.getDefiningOp<pypto::SelectOp>();
+        // The padded fulls and their reshapes must sit before the select
+        // they feed: the rewriter's insertion point has already moved past
+        // the unpacking itself.
+        rewriter.setInsertionPoint(select);
+        Value paddedOnes = padBranch(ones);
+        Value paddedZeros = padBranch(zeros);
+        rewriter.modifyOpInPlace(select, [&]() {
+          select.getTrueValueMutable().assign(paddedOnes);
+          select.getFalseValueMutable().assign(paddedZeros);
+        });
+        rewriter.eraseOp(ones.getDefiningOp());
+        rewriter.eraseOp(zeros.getDefiningOp());
+      }
     }
     return;
   }
@@ -624,8 +1313,7 @@ class CmpToPyptoPattern : public OpConversionPattern<SourceOp> {
     auto predicate = static_cast<pypto::CmpPredicate>(*code);
     Location loc = op->getLoc();
     Type resultType = op->getResult(0).getType();
-    Value mask =
-      rewriter.create<pypto::CmpOp>(loc, resultType, predicate, op->getOperands()[0], op->getOperands()[1]);
+    Value mask = rewriter.create<pypto::CmpOp>(loc, resultType, predicate, op->getOperands()[0], op->getOperands()[1]);
     replaceWithPackedMask(op, mask, rewriter);
     return success();
   }
@@ -698,25 +1386,7 @@ class ArithConstantPattern : public OpConversionPattern<arith::ConstantOp> {
 
     // Splat tile constants map onto `pl.tile.full(shape, dtype, value)`.
     if (auto dense = dyn_cast<DenseElementsAttr>(value)) {
-      auto shaped = dyn_cast<ShapedType>(type);
-      if (!shaped || !shaped.hasStaticShape() || !dense.isSplat()) {
-        return rewriter.notifyMatchFailure(op, "only static splat tile constants map to pl.tile.full");
-      }
-      auto dtype = pyptoDtypeName(shaped.getElementType());
-      if (!dtype) {
-        return rewriter.notifyMatchFailure(op, "element type has no PyPTO dtype");
-      }
-      std::optional<std::string> elem;
-      if (isa<FloatType>(shaped.getElementType())) {
-        elem = floatToPythonText(dense.getSplatValue<APFloat>());
-      } else {
-        elem = intToPythonText(dense.getSplatValue<APInt>());
-      }
-      if (!elem) {
-        return rewriter.notifyMatchFailure(op, "unsupported splat value");
-      }
-      rewriter.replaceOpWithNewOp<pypto::TileFullOp>(op, type, rewriter.getStringAttr(*elem), ValueRange{});
-      return success();
+      return rewriteSplatConstant(op, dense, type, rewriter);
     }
 
     std::optional<std::string> text;
@@ -740,6 +1410,58 @@ class ArithConstantPattern : public OpConversionPattern<arith::ConstantOp> {
       return rewriter.notifyMatchFailure(op, "scalar type has no PyPTO dtype");
     }
     rewriter.replaceOpWithNewOp<pypto::ConstantOp>(op, type, rewriter.getStringAttr(*text));
+    return success();
+  }
+
+ private:
+  /// Maps a splat tile constant onto `pl.tile.full(shape, dtype, value)`,
+  /// raising the allocation to the padded bounds of the sibling tiles it
+  /// merges with downstream.
+  LogicalResult rewriteSplatConstant(arith::ConstantOp op, DenseElementsAttr dense, Type type,
+                                     ConversionPatternRewriter &rewriter) const {
+    auto shaped = dyn_cast<ShapedType>(type);
+    if (!shaped || !shaped.hasStaticShape() || !dense.isSplat()) {
+      return rewriter.notifyMatchFailure(op, "only static splat tile constants map to pl.tile.full");
+    }
+    auto dtype = pyptoDtypeName(shaped.getElementType());
+    if (!dtype) {
+      return rewriter.notifyMatchFailure(op, "element type has no PyPTO dtype");
+    }
+    std::optional<std::string> elem;
+    if (isa<FloatType>(shaped.getElementType())) {
+      elem = floatToPythonText(dense.getSplatValue<APFloat>());
+    } else {
+      elem = intToPythonText(dense.getSplatValue<APInt>());
+    }
+    if (!elem) {
+      return rewriter.notifyMatchFailure(op, "unsupported splat value");
+    }
+    // PTOAS lays every tile in the block onto one grid, so the constant
+    // must allocate the padded shape of the siblings it merges with
+    // downstream (e.g. a [3060] one against a Taylor chain over a load
+    // that pads to [3064]) or the merge mismatches at compile time.
+    // Spell the raised bound as `tile.full` extents; the result type
+    // keeps naming the tile's own shape and an unraised constant keeps
+    // the extents-free spelling.
+    SmallVector<int64_t> siblingBounds;
+    collectSiblingAllocationBounds(op.getResult(), 0, siblingBounds);
+    ValueRange extents;
+    SmallVector<Value> raised;
+    bool needsPad = siblingBounds.size() == static_cast<size_t>(shaped.getRank());
+    for (unsigned axis = 0; needsPad && axis < shaped.getRank(); ++axis) {
+      needsPad = !ShapedType::isDynamic(siblingBounds[axis]) && siblingBounds[axis] > shaped.getDimSize(axis);
+    }
+    if (needsPad) {
+      for (unsigned axis = 0; axis < shaped.getRank(); ++axis) {
+        int64_t size = shaped.getDimSize(axis);
+        if (!ShapedType::isDynamic(siblingBounds[axis])) {
+          size = std::max(size, siblingBounds[axis]);
+        }
+        raised.push_back(rewriter.create<arith::ConstantIndexOp>(op.getLoc(), size));
+      }
+      extents = ValueRange(raised);
+    }
+    rewriter.replaceOpWithNewOp<pypto::TileFullOp>(op, type, rewriter.getStringAttr(*elem), extents);
     return success();
   }
 };
@@ -782,29 +1504,83 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
     // row while the valid extent keeps bounding the data actually moved.
     unsigned elemBytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
     int64_t cols = shaped.getDimSize(shaped.getRank() - 1);
-    if (elemBytes == 0 || cols <= 0 || (cols * static_cast<int64_t>(elemBytes)) % 32 == 0) {
-      // A rank-reduced read (source rank > tile rank) keeps addressing
-      // every source dimension: convert-pypto-to-emitpy pads the tile's
-      // shape with leading ones so `pl.load` shares the source's
-      // coordinate system, and the runtime then returns a tile with the
-      // source's rank while downstream ops are typed against the tile's
-      // own (physical) rank -- restore the tile's shape with a
-      // `pypto.reshape` right after the load.
-      auto srcType = dyn_cast<ShapedType>(op.getSource().getType());
-      if (srcType && srcType.getRank() > shaped.getRank()) {
-        Value load = rewriter.create<pypto::LoadOp>(op.getLoc(), op.getVector().getType(), op.getSource(),
-                                                    op.getIndices(), ValueRange{}, ValueRange{});
-        rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getVector().getType(), load);
-        return success();
+    bool plainRead = elemBytes == 0 || cols <= 0 || (cols * static_cast<int64_t>(elemBytes)) % 32 == 0;
+    if (plainRead) {
+      // PTOAS lays every tile in the block onto one grid, so even a
+      // whole-32-byte-row read must still cover the allocation of the
+      // tiles it merges with downstream: an fp32 [6280] workspace read
+      // (6280*4 = 785 whole rows) combining with a bf16 [6288] sibling
+      // (6280*2 bytes pad up to 393 rows, kept through the cast)
+      // mismatches at compile time. A sibling bound above the read's own
+      // extent reroutes through the padded/valid form so both sides
+      // allocate one shape, while the valid extent keeps bounding the
+      // data actually moved.
+      SmallVector<int64_t> siblingBounds;
+      collectSiblingAllocationBounds(op.getVector(), 0, siblingBounds);
+      for (unsigned dim = 0; dim < shaped.getRank(); ++dim) {
+        if (dim < siblingBounds.size() && !ShapedType::isDynamic(siblingBounds[dim]) &&
+            siblingBounds[dim] > shaped.getDimSize(dim)) {
+          plainRead = false;
+          break;
+        }
       }
-      rewriter.replaceOpWithNewOp<pypto::LoadOp>(op, op.getVector().getType(), op.getSource(), op.getIndices(),
-                                                 ValueRange{}, ValueRange{});
-      return success();
+    }
+    if (plainRead) {
+      return rewritePlainRead(op, shaped, rewriter);
     }
     return rewritePaddedStaticRead(op, shaped, rewriter);
   }
 
  private:
+  /// Rewrites a statically shaped, plain (unpadded) read into `pl.load`,
+  /// restoring the tile's own shape with a `pypto.reshape` when the read is
+  /// rank-reduced.
+  LogicalResult rewritePlainRead(TransferReadOp op, ShapedType shaped, ConversionPatternRewriter &rewriter) const {
+    // A rank-reduced read (source rank > tile rank) keeps addressing
+    // every source dimension: `pl.load` shares the source's coordinate
+    // system, and the runtime then returns a tile with the source's
+    // rank while downstream ops are typed against the tile's own
+    // (physical) rank -- restore the tile's shape with a `pypto.reshape`
+    // right after the load. Reads that drop leading source dimensions
+    // keep the 3-argument form: convert-pypto-to-emitpy reconstructs
+    // the source-coordinate shape by padding the tile's shape with
+    // leading ones. Any other projection must spell the shape out --
+    // the tile's extents at their projected source dimensions, 1 along
+    // the dropped ones -- because the leading-ones guess would misplace
+    // the extents (e.g. drop a middle dimension).
+    auto srcType = dyn_cast<ShapedType>(op.getSource().getType());
+    if (srcType && srcType.getRank() > shaped.getRank()) {
+      unsigned srcRank = srcType.getRank();
+      unsigned tileRank = shaped.getRank();
+      SmallVector<unsigned> tileToSrc = tileToSourceDims(op, tileRank, srcRank);
+      bool leadingDrop = tileToSrc.size() == tileRank;
+      for (unsigned dim = 0; dim < tileRank && leadingDrop; ++dim) {
+        leadingDrop = tileToSrc[dim] == srcRank - tileRank + dim;
+      }
+      if (tileToSrc.size() == tileRank && !leadingDrop) {
+        Location loc = op.getLoc();
+        Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+        SmallVector<Value> shapeValues(srcRank, one);
+        for (unsigned tileDim = 0; tileDim < tileRank; ++tileDim) {
+          shapeValues[tileToSrc[tileDim]] =
+            rewriter.create<arith::ConstantIndexOp>(loc, shaped.getDimSize(tileDim));
+        }
+        Value load = rewriter.create<pypto::LoadOp>(loc, op.getVector().getType(), op.getSource(), op.getIndices(),
+                                                    ValueRange(shapeValues), ValueRange(shapeValues));
+        rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getVector().getType(), load, ValueRange(),
+                                                       ValueRange());
+        return success();
+      }
+      Value load = rewriter.create<pypto::LoadOp>(op.getLoc(), op.getVector().getType(), op.getSource(),
+                                                  op.getIndices(), ValueRange{}, ValueRange{});
+      rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getVector().getType(), load, ValueRange(), ValueRange());
+      return success();
+    }
+    rewriter.replaceOpWithNewOp<pypto::LoadOp>(op, op.getVector().getType(), op.getSource(), op.getIndices(),
+                                               ValueRange{}, ValueRange{});
+    return success();
+  }
+
   /// Maps each tile axis onto the source dimension it reads: a
   /// rank-reduced read projects each tile axis onto one source dimension
   /// through the permutation map, and the dropped source dimensions stay
@@ -872,11 +1648,38 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
       paddedValues.assign(srcRank, one);
       validValues.assign(srcRank, one);
     }
+    SmallVector<ReductionAxisPad> pads;
+    collectReductionAxisPads(op.getVector(), 0, pads);
+    SmallVector<int64_t> siblingBounds;
+    collectSiblingAllocationBounds(op.getVector(), 0, siblingBounds);
     for (unsigned tileDim = 0; tileDim < tileRank; ++tileDim) {
       int64_t size = shaped.getDimSize(tileDim);
-      int64_t bound = tileDim + 1 == tileRank ? alignExtentTo32B(size, elemBytes) : size;
+      int64_t bound = padAllocationExtent(size, tileDim, tileRank, elemBytes, pads);
+      // The sibling grid raises the bound the same way the broadcast
+      // side's sibling query does.
+      if (tileDim < siblingBounds.size() && !ShapedType::isDynamic(siblingBounds[tileDim])) {
+        bound = std::max(bound, siblingBounds[tileDim]);
+      }
       paddedValues[tileToSrc[tileDim]] = rewriter.create<arith::ConstantIndexOp>(loc, bound);
       validValues[tileToSrc[tileDim]] = rewriter.create<arith::ConstantIndexOp>(loc, size);
+    }
+    // Rank reduction: the load shares the source's coordinate system, so
+    // the runtime hands back a tile of the source's rank while downstream
+    // ops are typed against the tile's own rank -- restore it with a
+    // reshape right after the load, as the other read paths do. The
+    // reshape's extents are the tile's allocation bounds (the values at
+    // the tile dims' source positions; the element counts match: every
+    // dropped source dimension spans a single element).
+    if (srcRank > tileRank) {
+      SmallVector<Value> tileExtents;
+      for (unsigned tileDim = 0; tileDim < tileRank; ++tileDim) {
+        tileExtents.push_back(paddedValues[tileToSrc[tileDim]]);
+      }
+      Value load = rewriter.create<pypto::LoadOp>(op.getLoc(), op.getVector().getType(), op.getSource(),
+                                                  op.getIndices(), ValueRange(paddedValues), ValueRange(validValues));
+      rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getVector().getType(), load, ValueRange(tileExtents),
+                                                    ValueRange());
+      return success();
     }
     rewriter.replaceOpWithNewOp<pypto::LoadOp>(op, op.getVector().getType(), op.getSource(), op.getIndices(),
                                                ValueRange(paddedValues), ValueRange(validValues));
@@ -921,6 +1724,11 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
     }
     Location loc = op.getLoc();
     ValueRange maxSizes = op.getMaxSizes();
+    unsigned elemBytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
+    SmallVector<ReductionAxisPad> pads;
+    collectReductionAxisPads(op.getVector(), 0, pads);
+    SmallVector<int64_t> siblingBounds;
+    collectSiblingAllocationBounds(op.getVector(), 0, siblingBounds);
     // Per dimension: the tile's allocated extent, and the valid extent.
     SmallVector<Value> shapeValues;
     SmallVector<Value> validValues;
@@ -934,42 +1742,94 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
         }
         unsigned allocIdx = perDim ? dim : dynIdx - 1;
         Value alloc = allocIdx < maxSizes.size() ? maxSizes[allocIdx] : extent;
-        // PTOAS allocates whole 32-byte rows: pad a constant bound so the
-        // allocation is addressable; the valid extent still bounds the
-        // data actually moved.
-        if (auto bound = constIndexValue(alloc)) {
-          unsigned elemBytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
-          alloc = rewriter.create<arith::ConstantIndexOp>(loc, alignExtentTo32B(*bound, elemBytes));
-        }
+        alloc = padDynamicAllocation(alloc, dim, tileRank, elemBytes, pads, siblingBounds, rewriter, loc);
         shapeValues.push_back(alloc);
         validValues.push_back(extent);
         continue;
       }
-      Value extent = rewriter.create<arith::ConstantIndexOp>(loc, size);
+      // A static axis surviving a downstream reduction pads too: the
+      // allocation must cover the reduction's result rows, while the
+      // valid extent keeps bounding the data actually moved.
+      int64_t padded = padAllocationExtent(size, dim, tileRank, elemBytes, pads);
+      if (dim < siblingBounds.size() && !ShapedType::isDynamic(siblingBounds[dim])) {
+        padded = std::max(padded, siblingBounds[dim]);
+      }
+      Value extent = rewriter.create<arith::ConstantIndexOp>(loc, padded);
+      Value valid = rewriter.create<arith::ConstantIndexOp>(loc, size);
       shapeValues.push_back(extent);
-      validValues.push_back(extent);
+      validValues.push_back(valid);
     }
     // Rank reduction: dropped source dimensions span a single element;
     // the tile's axes carry their extents at the source dimensions the
     // permutation map names.
     if (srcRank > tileRank) {
-      SmallVector<Value> srcShape(srcRank);
-      SmallVector<Value> srcValid(srcRank);
-      Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-      for (unsigned dim = 0; dim < srcRank; ++dim) {
-        srcShape[dim] = one;
-        srcValid[dim] = one;
-      }
-      for (unsigned tileDim = 0; tileDim < tileRank; ++tileDim) {
-        srcShape[tileToSrc[tileDim]] = shapeValues[tileDim];
-        srcValid[tileToSrc[tileDim]] = validValues[tileDim];
-      }
-      shapeValues = std::move(srcShape);
-      validValues = std::move(srcValid);
+      emitRankReducedDynamicLoad(op, shaped, rewriter, shapeValues, validValues, tileToSrc, srcRank);
+      return success();
     }
     rewriter.replaceOpWithNewOp<pypto::LoadOp>(op, op.getVector().getType(), op.getSource(), op.getIndices(),
                                                ValueRange(shapeValues), ValueRange(validValues));
     return success();
+  }
+
+  /// Pads a dynamic read axis's allocation bound to whole 32-byte rows and
+  /// to the sibling grid, returning the padded value (a new constant only
+  /// when padding actually changes the bound). PTOAS allocates whole
+  /// 32-byte rows on the contiguous (last) dimension and on the axes
+  /// surviving a downstream partial reduction (padded by that reduction's
+  /// result dtype, so the cross-dtype tiles a reduction combines agree on
+  /// one extent); the valid extent still bounds the data actually moved.
+  /// Other leading dimensions carry no row-padding requirement, so a
+  /// cross-dtype tile with equal extents stays shape-compatible with the
+  /// tiles it combines with. The sibling grid raises the padded bound the
+  /// same way the broadcast side's sibling query does, so tiles merging
+  /// downstream share one allocation shape.
+  Value padDynamicAllocation(Value alloc, unsigned dim, unsigned tileRank, unsigned elemBytes,
+                             const SmallVector<ReductionAxisPad> &pads,
+                             const SmallVector<int64_t> &siblingBounds, ConversionPatternRewriter &rewriter,
+                             Location loc) const {
+    if (auto bound = constIndexValue(alloc)) {
+      int64_t padded = padAllocationExtent(*bound, dim, tileRank, elemBytes, pads);
+      if (dim < siblingBounds.size() && !ShapedType::isDynamic(siblingBounds[dim])) {
+        padded = std::max(padded, siblingBounds[dim]);
+      }
+      if (padded != *bound) {
+        return rewriter.create<arith::ConstantIndexOp>(loc, padded);
+      }
+    }
+    return alloc;
+  }
+
+  /// Emits the load for a rank-reduced dynamic read, restoring the tile's
+  /// own rank with a reshape right after the load, as the statically
+  /// shaped path does.
+  void emitRankReducedDynamicLoad(npuvector::TransferReadOp op, ShapedType shaped,
+                                  ConversionPatternRewriter &rewriter, const SmallVector<Value> &shapeValues,
+                                  const SmallVector<Value> &validValues, ArrayRef<unsigned> tileToSrc,
+                                  unsigned srcRank) const {
+    Location loc = op.getLoc();
+    // The load shares the source's coordinate system, so the runtime
+    // hands back a tile of the source's rank while downstream ops are
+    // typed against the tile's own rank -- restore it with a reshape
+    // right after the load. The reshape's extents are the tile's
+    // allocation bounds, the same values the load allocates (the
+    // element counts match: every dropped source dimension spans a
+    // single element).
+    SmallVector<Value> tileExtents = shapeValues;
+    SmallVector<Value> srcShape(srcRank);
+    SmallVector<Value> srcValid(srcRank);
+    Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    for (unsigned dim = 0; dim < srcRank; ++dim) {
+      srcShape[dim] = one;
+      srcValid[dim] = one;
+    }
+    for (unsigned tileDim = 0; tileDim < shaped.getRank(); ++tileDim) {
+      srcShape[tileToSrc[tileDim]] = shapeValues[tileDim];
+      srcValid[tileToSrc[tileDim]] = validValues[tileDim];
+    }
+    Value load = rewriter.create<pypto::LoadOp>(loc, op.getVector().getType(), op.getSource(), op.getIndices(),
+                                                ValueRange(srcShape), ValueRange(srcValid));
+    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getVector().getType(), load, ValueRange(tileExtents),
+                                                  ValueRange());
   }
 };
 
@@ -1046,8 +1906,10 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     // must re-enter the destination's coordinate system. The padded tile
     // rides through FlattenTileNdTo2D like any other ND tile, whose 2D
     // flattening is what `pl.store` requires -- a bare rank-1 tile is
-    // never flattened and fails PTO's 2D valid-shape check. Higher-rank
-    // tiles are already 2D-collapsible and keep the default store.
+    // never flattened and fails PTO's 2D valid-shape check. The tile's N
+    // lands on the destination dim the permutation map projects, so
+    // transposed stores place it on a leading dim. Higher-rank tiles are
+    // already 2D-collapsible and keep the default store.
     if (valueType && destType && valueType.getRank() == 1 && destType.getRank() > 2) {
       if (failed(storeRankReducedPadded(rewriter, loc, op, vector, destType, valueType))) {
         return failure();
@@ -1115,7 +1977,13 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
   /// Writes one scalar into `dest` at `indices` with `pl.write`.
   static void writeScalar(ConversionPatternRewriter &rewriter, Location loc, Value dest, ValueRange indices,
                           Value scalar) {
-    rewriter.create<pypto::WriteOp>(loc, dest, scalar, indices);
+    SmallVector<Value> offsets(indices.begin(), indices.end());
+    if (auto shaped = dyn_cast<ShapedType>(dest.getType())) {
+      while (offsets.size() < static_cast<size_t>(shaped.getRank())) {
+        offsets.insert(offsets.begin(), rewriter.create<arith::ConstantIndexOp>(loc, 0));
+      }
+    }
+    rewriter.create<pypto::WriteOp>(loc, dest, scalar, ValueRange(offsets));
   }
 
   /// Writes a scalar into a single-element destination with `pl.write`,
@@ -1130,8 +1998,11 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
   }
 
   /// The allocation bound of a dynamic rank-1 tile produced by an
-  /// unconverted `transfer_read`: its first `maxSizes` entry, padded to
-  /// whole 32-byte rows as the read's rewrite will do.
+  /// unconverted `transfer_read`: its first `maxSizes` entry, padded the
+  /// same way `rewriteDynamicRead` pads the read it rewrites -- whole
+  /// 32-byte rows in the tile's own dtype, any reduction-surviving pad
+  /// the chain carries, and the sibling grid its merges share -- so the
+  /// bound reported here is the bound that rewrite allocates.
   static std::optional<int64_t> readAllocationBound(npuvector::TransferReadOp read, Value v) {
     ValueRange maxSizes = read.getMaxSizes();
     if (maxSizes.empty()) {
@@ -1143,7 +2014,15 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     }
     if (auto shaped = dyn_cast<ShapedType>(v.getType())) {
       unsigned elemBytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
-      return alignExtentTo32B(*bound, elemBytes);
+      SmallVector<ReductionAxisPad> pads;
+      collectReductionAxisPads(read.getVector(), 0, pads);
+      SmallVector<int64_t> siblingBounds;
+      collectSiblingAllocationBounds(read.getVector(), 0, siblingBounds);
+      int64_t padded = padAllocationExtent(*bound, 0, shaped.getRank(), elemBytes, pads);
+      if (!siblingBounds.empty() && !ShapedType::isDynamic(siblingBounds[0])) {
+        padded = std::max(padded, siblingBounds[0]);
+      }
+      return padded;
     }
     return bound;
   }
@@ -1172,8 +2051,8 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
   /// producing read's allocation.
   static bool isElementWiseTileOp(Operation *op) {
     return isa<pypto::AddOp, pypto::SubOp, pypto::MulOp, pypto::DivOp, pypto::MaximumOp, pypto::MinimumOp,
-                pypto::AbsOp, pypto::ExpOp, pypto::LogOp, pypto::SqrtOp, pypto::RsqrtOp, pypto::SinOp,
-                pypto::CosOp>(op);
+               pypto::MaximumsOp, pypto::MinimumsOp, pypto::AbsOp, pypto::ExpOp, pypto::LogOp, pypto::SqrtOp,
+               pypto::RsqrtOp, pypto::RecipOp, pypto::NegOp, pypto::SinOp, pypto::CosOp>(op);
   }
 
   /// The allocation bound a broadcast names for its own result: its first
@@ -1199,8 +2078,7 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
   /// a dynamic store may still see this form. The rank-1 result keeps the
   /// input's allocation on the surviving axis, mirroring the pypto form
   /// below.
-  static std::optional<int64_t> npuvectorReductionExtent(npuvector::ReductionOp reduction, Value v,
-                                                         unsigned depth) {
+  static std::optional<int64_t> npuvectorReductionExtent(npuvector::ReductionOp reduction, Value v, unsigned depth) {
     auto shaped = dyn_cast<ShapedType>(v.getType());
     auto dims = reduction.getReductionDims();
     if (!shaped || shaped.getRank() != 1 || !dims || dims->size() != 1) {
@@ -1225,9 +2103,15 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
   }
 
   /// The dynamic extent of the first shaped operand, for ops that keep
-  /// their operand's allocation.
+  /// their operand's allocation. A select's condition is skipped: the
+  /// frontend derives the result's shape and valid extents from the value
+  /// operands only, so the mask's allocation must not win here either.
   static std::optional<int64_t> operandTileExtent(Operation *owner, unsigned depth) {
-    for (Value operand : owner->getOperands()) {
+    bool skipCond = isa<pypto::SelectOp, npuvector::SelectOp, arith::SelectOp>(owner);
+    for (auto [index, operand] : llvm::enumerate(owner->getOperands())) {
+      if (skipCond && index == 0) {
+        continue;
+      }
       if (!isa<ShapedType>(operand.getType())) {
         continue;
       }
@@ -1249,10 +2133,9 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
       return true;
     }
     // Unconverted element-wise ops keep the read's allocation.
-    if (isa<arith::AddIOp, arith::AddFOp, arith::MulIOp, arith::MulFOp, arith::SubIOp, arith::SubFOp,
-            arith::DivSIOp, arith::DivUIOp, arith::DivFOp, arith::MaxSIOp, arith::MinSIOp, math::AbsFOp,
-            math::ExpOp, math::LogOp, math::SqrtOp, math::RsqrtOp, math::SinOp, math::CosOp, math::RoundOp,
-            math::FloorOp, math::CeilOp>(op)) {
+    if (isa<arith::AddIOp, arith::AddFOp, arith::MulIOp, arith::MulFOp, arith::SubIOp, arith::SubFOp, arith::DivSIOp,
+            arith::DivUIOp, arith::DivFOp, arith::MaxSIOp, arith::MinSIOp, math::AbsFOp, math::ExpOp, math::LogOp,
+            math::SqrtOp, math::RsqrtOp, math::SinOp, math::CosOp, math::RoundOp, math::FloorOp, math::CeilOp>(op)) {
       return true;
     }
     // Unconverted casts (arith and npuvector numeric cast families) keep the
@@ -1268,8 +2151,8 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     // fed through a where/select (relu, masked_fill) or a comparison before
     // a dynamic store still names the read's bound. Both the unconverted
     // and the pypto forms appear because patterns run in arbitrary order.
-    if (isa<pypto::SelectOp, pypto::CmpOp, npuvector::SelectOp, arith::SelectOp, npuvector::CmpIOp,
-            npuvector::CmpFOp, arith::MaximumFOp, arith::MinimumFOp>(op)) {
+    if (isa<pypto::SelectOp, pypto::CmpOp, npuvector::SelectOp, arith::SelectOp, npuvector::CmpIOp, npuvector::CmpFOp,
+            arith::MaximumFOp, arith::MinimumFOp>(op)) {
       return true;
     }
     return false;
@@ -1344,6 +2227,7 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     // allocated by the producing read, whose maxSizes bound it.
     std::optional<int64_t> dynamicExtent;
     int64_t n = valueType.getNumElements();
+    int64_t validN = n;
     if (n == ShapedType::kDynamic) {
       dynamicExtent = dynamicTileExtent(vector);
       if (!dynamicExtent) {
@@ -1351,37 +2235,26 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
       }
       n = *dynamicExtent;
     }
+    // A static shape spells the valid element count too: a
+    // 32-byte-aligned read allocates wider than it validates (2704
+    // valid bf16 elements in a padded 2720-row). Lift n to the tile's
+    // allocated bound and keep the valid count: the reshape below
+    // conserves allocated elements, while the store must write only the
+    // valid region, which the valid-extent reshape spells out.
+    bool lifted = false;
+    if (auto allocation = tileAllocationShape(vector);
+        allocation && allocation->size() == 1 && !ShapedType::isDynamic((*allocation)[0]) && (*allocation)[0] > n) {
+      n = (*allocation)[0];
+      lifted = true;
+    }
     unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
     if (!dynamicExtent && n * elemBytes % 32 != 0) {
       // Sub-32B rows cannot hold a tile at all: fall back to
-      // element-wise scalar writes. The rank-1 value spans the
-      // destination's trailing axis, so the leading offsets pass
-      // through and only the last one advances per element. `pl.write`
-      // accepts dynamic offsets, so the base need not be constant.
-      if (std::optional<AffineMap> perm = op.getPermutationMap();
-          perm && !perm->isMinorIdentity()) {
-        return rewriter.notifyMatchFailure(op, "sub-32B element-wise fallback needs a minor-identity permutation");
-      }
-      ValueRange indices = op.getIndices();
-      SmallVector<Value> leading = llvm::to_vector(indices.drop_back());
-      Value base = indices.back();
-      for (int64_t k = 0; k < n; ++k) {
-        Value elem = scalarRead(rewriter, loc, vector, elemType, k);
-        Value offset;
-        if (std::optional<int64_t> baseConst = constIndexValue(base)) {
-          offset = rewriter.create<arith::ConstantIndexOp>(loc, *baseConst + k);
-        } else if (k == 0) {
-          offset = base;
-        } else {
-          offset = rewriter.create<arith::AddIOp>(loc, base, rewriter.create<arith::ConstantIndexOp>(loc, k));
-        }
-        SmallVector<Value> elemIndices = leading;
-        elemIndices.push_back(offset);
-        writeScalar(rewriter, loc, op.getSource(), elemIndices, elem);
-      }
-      return success();
+      // element-wise scalar writes.
+      return storeRankOneElementWise(rewriter, loc, op, vector, destType, elemType, validN);
     }
-    Value reshaped = reshapeTileOp(rewriter, loc, vector, 1, n, elemType);
+    Value reshaped = lifted ? reshapeTileWithValidOp(rewriter, loc, vector, 1, n, 1, validN, elemType)
+                            : reshapeTileOp(rewriter, loc, vector, 1, n, elemType);
     SmallVector<Value> offsetItems;
     Value storeDest = op.getSource();
     if (destType.getRank() == 1) {
@@ -1408,7 +2281,8 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
       } else if (auto funcOp = op->template getParentOfType<func::FuncOp>()) {
         rewriter.setInsertionPointToStart(&funcOp.getBody().front());
       }
-      storeDest = rewriter.create<pypto::ReshapeOp>(loc, viewType, op.getSource()).getResult();
+      storeDest =
+        rewriter.create<pypto::ReshapeOp>(loc, viewType, op.getSource(), ValueRange(), ValueRange()).getResult();
     }
     llvm::append_range(offsetItems, op.getIndices());
     // `pypto.store` keeps the offsets as explicit index operands;
@@ -1418,21 +2292,67 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     return success();
   }
 
+  /// Stores a statically-sized sub-32-byte rank-1 row element-wise through
+  /// `pl.write`s: the rank-1 value spans the destination's trailing axis,
+  /// so the leading offsets pass through and only the last one advances per
+  /// element. `pl.write` accepts dynamic offsets, so the base need not be
+  /// constant.
+  static LogicalResult storeRankOneElementWise(ConversionPatternRewriter &rewriter, Location loc, TransferWriteOp op,
+                                               Value vector, ShapedType destType, Type elemType, int64_t validN) {
+    if (std::optional<AffineMap> perm = op.getPermutationMap(); perm && !perm->isMinorIdentity()) {
+      return rewriter.notifyMatchFailure(op, "sub-32B element-wise fallback needs a minor-identity permutation");
+    }
+    ValueRange indices = op.getIndices();
+    SmallVector<Value> leading = llvm::to_vector(indices.drop_back());
+    Value base = indices.back();
+    Value scalarDest = op.getSource();
+    if (destType.getRank() == 1) {
+      Type viewType;
+      if (auto memrefType = dyn_cast<MemRefType>(destType)) {
+        viewType = MemRefType::get({1, memrefType.getNumElements()}, memrefType.getElementType());
+      } else {
+        auto tensorType = cast<RankedTensorType>(destType);
+        viewType = RankedTensorType::get({1, tensorType.getNumElements()}, tensorType.getElementType());
+      }
+      OpBuilder::InsertionGuard guard(rewriter);
+      if (Operation *destDef = op.getSource().getDefiningOp()) {
+        rewriter.setInsertionPointAfter(destDef);
+      } else if (auto funcOp = op->template getParentOfType<func::FuncOp>()) {
+        rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+      }
+      scalarDest =
+        rewriter.create<pypto::ReshapeOp>(loc, viewType, op.getSource(), ValueRange(), ValueRange()).getResult();
+    }
+    for (int64_t k = 0; k < validN; ++k) {
+      Value elem = scalarRead(rewriter, loc, vector, elemType, k);
+      Value offset;
+      if (std::optional<int64_t> baseConst = constIndexValue(base)) {
+        offset = rewriter.create<arith::ConstantIndexOp>(loc, *baseConst + k);
+      } else if (k == 0) {
+        offset = base;
+      } else {
+        offset = rewriter.create<arith::AddIOp>(loc, base, rewriter.create<arith::ConstantIndexOp>(loc, k));
+      }
+      SmallVector<Value> elemIndices = leading;
+      if (destType.getRank() == 1) {
+        elemIndices.insert(elemIndices.begin(), rewriter.create<arith::ConstantIndexOp>(loc, 0));
+      }
+      elemIndices.push_back(offset);
+      writeScalar(rewriter, loc, scalarDest, elemIndices, elem);
+    }
+    return success();
+  }
+
   /// Stores a rank-reduced value (destination rank > tile rank) through a
   /// `[1, ..., 1, N...]` padded reshape -- the mirror image of the reshape
   /// the load-side lowering inserts after a rank-reduced read. `pl.store`
   /// offsets and shapes share the destination's coordinate system, and
   /// PTO's tile flattening only covers ND tiles: a bare rank-1 tile fails
   /// the 2D valid-shape check, so the value is padded back to the
-  /// destination's rank with leading singleton dims. A dynamic extent
-  /// resolves to the tile's allocated bound.
+  /// destination's rank with singleton dims on the axes it does not span.
+  /// A dynamic extent resolves to the tile's allocated bound.
   static LogicalResult storeRankReducedPadded(ConversionPatternRewriter &rewriter, Location loc, TransferWriteOp op,
                                               Value vector, ShapedType destType, ShapedType valueType) {
-    // The padding assumes the tile spans the destination's trailing
-    // dimensions, which is exactly the minor-identity projection.
-    if (std::optional<AffineMap> perm = op.getPermutationMap(); perm && !perm->isMinorIdentity()) {
-      return rewriter.notifyMatchFailure(op, "rank-reduced padded store needs a minor-identity permutation");
-    }
     Type elemType = valueType.getElementType();
     if (!pyptoDtypeName(elemType)) {
       return rewriter.notifyMatchFailure(op, "rank-reduced store element type has no PyPTO dtype");
@@ -1448,10 +2368,73 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
       }
       shape[0] = *dynamicExtent;
     }
-    SmallVector<int64_t> padded(destType.getRank() - shape.size(), 1);
-    llvm::append_range(padded, shape);
-    Type paddedType = pypto::TileType::get(rewriter.getContext(), elemType, padded);
-    Value reshaped = rewriter.create<pypto::ReshapeOp>(loc, paddedType, vector);
+    // The value's shape spells its valid extent: a 32-byte-aligned read
+    // allocates wider than it validates (a valid-2 bf16 read out of a
+    // padded-16 row), so the store's reshape must name the allocated
+    // bound on every dim while the store itself writes only the valid
+    // region. Lift each dim to the tile's allocated bound and keep the
+    // valid shape for the store's valid extents.
+    bool lifted = false;
+    SmallVector<int64_t> valid = shape;
+    if (auto allocation = tileAllocationShape(vector); allocation && allocation->size() == shape.size()) {
+      for (auto [dim, alloc] : llvm::zip(shape, *allocation)) {
+        if (!ShapedType::isDynamic(alloc) && alloc > dim) {
+          dim = alloc;
+          lifted = true;
+        }
+      }
+    }
+    // Each tile dim spans the destination dim its permutation-map result
+    // projects onto; every other destination dim is padded with a 1. A
+    // minor-identity map keeps the tile dims trailing, while a leading
+    // projection (a transposed store) places them on the named dim. The
+    // store offsets already address the destination, so they pass through
+    // unchanged and only the padded shape tracks the projection.
+    SmallVector<int64_t> padded(destType.getRank(), 1);
+    SmallVector<int64_t> validRanked(destType.getRank(), 1);
+    if (std::optional<AffineMap> perm = op.getPermutationMap()) {
+      if (perm->getNumResults() != shape.size() || !perm->isProjectedPermutation()) {
+        return rewriter.notifyMatchFailure(op, "rank-reduced padded store needs a projected permutation map");
+      }
+      for (auto [result, dim] : llvm::zip(perm->getResults(), shape)) {
+        padded[cast<AffineDimExpr>(result).getPosition()] = dim;
+      }
+      for (auto [result, dim] : llvm::zip(perm->getResults(), valid)) {
+        validRanked[cast<AffineDimExpr>(result).getPosition()] = dim;
+      }
+    } else {
+      llvm::copy(shape, padded.end() - shape.size());
+      llvm::copy(valid, validRanked.end() - valid.size());
+    }
+    Value reshaped;
+    if (!lifted) {
+      Type paddedType = pypto::TileType::get(rewriter.getContext(), elemType, padded);
+      reshaped = rewriter.create<pypto::ReshapeOp>(loc, paddedType, vector, ValueRange(), ValueRange());
+    } else {
+      // A static lifted result type would trip the IR verifier's
+      // element-count check, which compares against the source's valid
+      // count; the dynamic type plus extents/valid-extents lowers to
+      // reshape+slice, naming the allocation while narrowing the store
+      // back down to the valid region. The pypto frontend cannot slice
+      // an Nd tile (FlattenTileNdTo2D), so above rank 2 only the extents
+      // are named: the identity reshape keeps the source view and the
+      // frontend's valid-shape deduction propagates the valid region
+      // through the unit axes.
+      SmallVector<int64_t> dynPadded(padded.size(), ShapedType::kDynamic);
+      Type paddedType = pypto::TileType::get(rewriter.getContext(), elemType, dynPadded);
+      SmallVector<Value> extents;
+      SmallVector<Value> validExtents;
+      extents.reserve(padded.size());
+      validExtents.reserve(padded.size());
+      for (auto [dim, validDim] : llvm::zip(padded, validRanked)) {
+        extents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, dim));
+        if (padded.size() <= 2) {
+          validExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, validDim));
+        }
+      }
+      reshaped = rewriter.create<pypto::ReshapeOp>(loc, paddedType, vector, ValueRange(extents),
+                                                   ValueRange(validExtents));
+    }
     rewriter.create<pypto::StoreOp>(loc, reshaped, op.getSource(), op.getIndices());
     return success();
   }
@@ -1492,9 +2475,7 @@ static std::optional<pypto::ReduceKind> reduceKind(vector::CombiningKind kind) {
 
 /// Whether the combining function has a scalar-form PyPTO op. All four
 /// reduction families have scalar forms (`pl.min`/`pl.max` for min/max).
-static bool hasScalarCombine(pypto::ReduceKind kind) {
-  return true;
-}
+static bool hasScalarCombine(pypto::ReduceKind kind) { return true; }
 
 /// Reads one element out of a tile.
 static Value readTileElement(ConversionPatternRewriter &rewriter, Location loc, Type resultType, Value tile,
@@ -1572,11 +2553,25 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
 
     // Partial reduction: a single reduced axis that must be the first or the
     // last one. Rank-1 reductions always sweep the only axis and fall
-    // through to the full-reduction lowering below.
+    // through to the full-reduction lowering below; a multi-axis `dims`
+    // that covers every source axis is likewise a full reduction (the
+    // vectorizer stamps e.g. [0, 1] over a rank-2 tile), not a partial one.
     if constexpr (std::is_same_v<ReductionOp, npuvector::ReductionOp>) {
       auto dims = op.getReductionDims();
       if (dims && !dims->empty() && shaped.getRank() >= 2) {
-        return rewritePartialReduction(op, rewriter, *kind, shaped);
+        bool coversAllAxes = dims->size() == static_cast<size_t>(shaped.getRank());
+        if (coversAllAxes) {
+          llvm::SmallDenseSet<int64_t> covered;
+          for (int64_t d : *dims) {
+            if (d < 0 || d >= static_cast<int64_t>(shaped.getRank()) || !covered.insert(d).second) {
+              coversAllAxes = false;
+              break;
+            }
+          }
+        }
+        if (!coversAllAxes) {
+          return rewritePartialReduction(op, rewriter, *kind, shaped);
+        }
       }
     }
 
@@ -1609,14 +2604,41 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
     if (shaped.hasStaticShape()) {
       scratchShape.assign(shaped.getShape().begin(), shaped.getShape().end());
     } else {
-      // A dynamic dim names no element count of its own: the scratch must
-      // cover the tile's allocation, which the producing read/broadcast's
-      // maxSizes bound (padded to whole 32-byte rows).
       auto bounds = tileAllocationShape(op.getVector());
       if (!bounds) {
         return rewriter.notifyMatchFailure(op, "a dynamic reduction needs the tile's allocation bounds");
       }
       scratchShape = std::move(*bounds);
+    }
+    if (Operation *def = op.getVector().getDefiningOp()) {
+      for (Value operand : def->getOperands()) {
+        if (!isa<ShapedType>(operand.getType())) {
+          continue;
+        }
+        SmallVector<int64_t> operandBounds;
+        if (auto bounds = tileAllocationShape(operand, 1)) {
+          operandBounds = *bounds;
+        }
+        SmallVector<int64_t> downstreamBounds;
+        collectSiblingAllocationBounds(operand, 0, downstreamBounds);
+        if (operandBounds.empty()) {
+          operandBounds = std::move(downstreamBounds);
+        } else if (operandBounds.size() == downstreamBounds.size()) {
+          for (unsigned axisIdx = 0; axisIdx < operandBounds.size(); ++axisIdx) {
+            if (!ShapedType::isDynamic(downstreamBounds[axisIdx])) {
+              operandBounds[axisIdx] = std::max(operandBounds[axisIdx], downstreamBounds[axisIdx]);
+            }
+          }
+        }
+        if (scratchShape.size() != operandBounds.size()) {
+          continue;
+        }
+        for (unsigned axisIdx = 0; axisIdx < scratchShape.size(); ++axisIdx) {
+          if (!ShapedType::isDynamic(operandBounds[axisIdx])) {
+            scratchShape[axisIdx] = std::max(scratchShape[axisIdx], operandBounds[axisIdx]);
+          }
+        }
+      }
     }
     Value tmp = createTmpTile(rewriter, loc, scratchShape, shaped.getElementType());
     Value reduced = rewriter.create<pypto::ReductionOp>(loc, resultType, kind, axis, op.getVector(), tmp).getResult();
@@ -1722,6 +2744,87 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
   }
 };
 
+/// Raises `bound` onto `siblingBounds[axis]`, initializing the bounds vector
+/// on first use and keeping the per-axis maximum.
+static void raiseSiblingBound(SmallVectorImpl<int64_t> &siblingBounds, unsigned rank, unsigned axis, int64_t bound) {
+  if (siblingBounds.empty()) {
+    siblingBounds.assign(rank, ShapedType::kDynamic);
+  }
+  siblingBounds[axis] =
+    ShapedType::isDynamic(siblingBounds[axis]) ? bound : std::max(siblingBounds[axis], bound);
+}
+
+/// The sibling allocation: PTOAS lays every tile in the block onto one
+/// grid, so the carrier/constant a broadcast materializes must also
+/// cover the allocation of the operands its result merges with -- e.g.
+/// a row grid the load padded from 139 to 140 -- or the expand/add
+/// that combines them mismatches at compile time. Only the operands
+/// sitting next to this broadcast inside its direct consumers carry
+/// that grid; the values feeding those operands resolve through
+/// `tileAllocationShape` (loads, carriers, lifted views, expands).
+template <typename BroadcastOp>
+static void collectBroadcastSiblingBounds(BroadcastOp op, unsigned rank, SmallVectorImpl<int64_t> &siblingBounds) {
+  for (Operation *user : op->getResult(0).getUsers()) {
+    for (Value operand : user->getOperands()) {
+      if (operand == op->getResult(0) || !isa<ShapedType>(operand.getType())) {
+        continue;
+      }
+      auto shape = tileAllocationShape(operand, 1);
+      if (!shape || shape->size() != rank) {
+        continue;
+      }
+      for (unsigned axis = 0; axis < rank; ++axis) {
+        if (ShapedType::isDynamic((*shape)[axis])) {
+          continue;
+        }
+        raiseSiblingBound(siblingBounds, rank, axis, (*shape)[axis]);
+      }
+    }
+  }
+}
+
+/// A rank-1 tile lifted onto a rank-2 result materializes as an
+/// expand of the reshaped source onto this zero carrier, and that
+/// reshape spells the allocated extent the source's read padded it
+/// to (9 fp32 elements align to 16). The carrier must cover the
+/// same extent on the identity-mapped axis -- also exactly what
+/// `tileAllocationShape`'s lift branch reports to sibling queries
+/// -- or the expand combines a [9, cols] carrier with a [16, 1]
+/// vector and every downstream tile mismatches at compile time.
+template <typename BroadcastOp>
+static void liftBroadcastIdentityBound(BroadcastOp op, unsigned rank, SmallVectorImpl<int64_t> &siblingBounds) {
+  if (rank != 2 || op.getDimension().size() != 1 || op.getDimension()[0] < 0 ||
+      op.getDimension()[0] >= static_cast<int64_t>(rank)) {
+    return;
+  }
+  auto srcType = dyn_cast<npuvector::NPUVectorType>(op.getSource().getType());
+  if (!srcType || srcType.getRank() != 1) {
+    return;
+  }
+  auto srcAlloc = tileAllocationShape(op.getSource());
+  if (!srcAlloc || srcAlloc->size() != 1 || ShapedType::isDynamic((*srcAlloc)[0])) {
+    return;
+  }
+  raiseSiblingBound(siblingBounds, rank, static_cast<unsigned>(op.getDimension()[0]), (*srcAlloc)[0]);
+}
+
+/// Pads a constant allocation bound for one result axis of a dynamic
+/// broadcast: the contiguous axis and the axes surviving a downstream
+/// partial reduction pad (by that reduction's result dtype), matching the
+/// extent a dynamic transfer_read allocates, so broadcast tiles stay
+/// shape-compatible with the loads they combine with; other leading axes
+/// stay unpadded for the same reason the read side leaves them alone.
+/// The sibling grid raises the bound the same way.
+static int64_t padBroadcastAxisBound(int64_t bound, unsigned axis, unsigned rank, unsigned elemBytes,
+                                     const SmallVectorImpl<ReductionAxisPad> &pads,
+                                     const SmallVectorImpl<int64_t> &siblingBounds) {
+  int64_t padded = padAllocationExtent(bound, axis, rank, elemBytes, pads);
+  if (axis < siblingBounds.size() && !ShapedType::isDynamic(siblingBounds[axis])) {
+    padded = std::max(padded, siblingBounds[axis]);
+  }
+  return padded;
+}
+
 template <typename BroadcastOp>
 static FailureOr<SmallVector<Value>> buildBroadcastExtents(BroadcastOp op, ShapedType resultType, Location loc,
                                                            ConversionPatternRewriter &rewriter) {
@@ -1742,22 +2845,31 @@ static FailureOr<SmallVector<Value>> buildBroadcastExtents(BroadcastOp op, Shape
       return rewriter.notifyMatchFailure(op, "dynamic sizes must match the broadcast's dynamic extents");
     }
     SmallVector<Value> shapeValues;
+    SmallVector<ReductionAxisPad> pads;
+    collectReductionAxisPads(op->getResult(0), 0, pads);
+    SmallVector<int64_t> siblingBounds;
+    collectBroadcastSiblingBounds(op, rank, siblingBounds);
+    liftBroadcastIdentityBound(op, rank, siblingBounds);
+    unsigned elemBytes = resultType.getElementType().getIntOrFloatBitWidth() / 8;
     unsigned dynIdx = 0;
     for (auto [axis, dim] : llvm::enumerate(resultType.getShape())) {
       if (dim == ShapedType::kDynamic) {
         Value alloc = perDim ? (axis < maxSizes.size() ? maxSizes[axis] : dynamicSizes[axis])
                              : (dynIdx < maxSizes.size() ? maxSizes[dynIdx] : dynamicSizes[dynIdx]);
-        // Pad a constant bound to whole 32-byte rows, matching the extent
-        // a dynamic transfer_read allocates, so broadcast tiles stay
-        // shape-compatible with the loads they combine with.
         if (auto bound = constIndexValue(alloc)) {
-          unsigned elemBytes = resultType.getElementType().getIntOrFloatBitWidth() / 8;
-          alloc = rewriter.create<arith::ConstantIndexOp>(loc, alignExtentTo32B(*bound, elemBytes));
+          int64_t padded = padBroadcastAxisBound(*bound, axis, rank, elemBytes, pads, siblingBounds);
+          if (padded != *bound) {
+            alloc = rewriter.create<arith::ConstantIndexOp>(loc, padded);
+          }
         }
         shapeValues.push_back(alloc);
         ++dynIdx;
       } else {
-        shapeValues.push_back(rewriter.create<arith::ConstantIndexOp>(loc, dim));
+        // A static axis surviving a downstream reduction pads too: the
+        // allocation must cover the reduction's result rows. The
+        // sibling grid raises it the same way.
+        int64_t padded = padBroadcastAxisBound(dim, axis, rank, elemBytes, pads, siblingBounds);
+        shapeValues.push_back(rewriter.create<arith::ConstantIndexOp>(loc, padded));
       }
     }
     return shapeValues;
@@ -1798,59 +2910,269 @@ static LogicalResult classifyDroppedAxes(npuvector::NPUVectorType srcType, Shape
   return success();
 }
 
+/// The outbound reshape of a row expand targets a rank-N destination, but
+/// the flat carrier keeps one extent per rank-2 axis: `pypto.reshape`
+/// takes one extent and one valid bound per result dimension. The leading
+/// axes keep their destination extent (their product is the carrier's row
+/// count), the last axis carries the 32B-aligned carrier columns, and the
+/// valid window is the destination shape throughout.
+static void appendRowExpandResultExtents(const SmallVector<int64_t> &destShape, const SmallVector<Value> &destBounds,
+                                         bool dynamicCols, int64_t carrierCols, unsigned rank, Location loc,
+                                         SmallVectorImpl<Value> &resultExtents, SmallVectorImpl<Value> &resultValid,
+                                         ConversionPatternRewriter &rewriter) {
+  for (unsigned axis = 0; axis + 1 < rank; ++axis) {
+    if (!ShapedType::isDynamic(destShape[axis])) {
+      resultExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, destShape[axis]));
+      resultValid.push_back(rewriter.create<arith::ConstantIndexOp>(loc, destShape[axis]));
+    } else {
+      resultExtents.push_back(destBounds[axis]);
+      resultValid.push_back(destBounds[axis]);
+    }
+  }
+  if (!dynamicCols) {
+    resultExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, carrierCols));
+    resultValid.push_back(rewriter.create<arith::ConstantIndexOp>(loc, destShape.back()));
+  } else {
+    resultExtents.push_back(destBounds.back());
+    resultValid.push_back(destBounds.back());
+  }
+}
+
+/// Row-expands `vec` — whose broadcast axis (the dropped one) already
+/// sits last with extent 1 — against a zero carrier: both collapse
+/// their alignment axes onto a rank-2 [rows, 1] / [rows, cols] pair,
+/// the expand family's vector contract, and the result reshapes back
+/// to `destShape`. The leading extents of `vecShape` and `destShape`
+/// agree — they differ only in the broadcast axis.
+static Value rowExpandOntoCarrier(ShapedType shapedResult, Location loc, StringRef zero, unsigned rank, Value vec,
+                                  const SmallVector<int64_t> &vecShape, const SmallVector<Value> &vecBounds,
+                                  const SmallVector<int64_t> &vecAlloc, const SmallVector<int64_t> &destShape,
+                                  const SmallVector<Value> &destBounds, ConversionPatternRewriter &rewriter) {
+  auto constant = [&](int64_t v) { return rewriter.create<arith::ConstantIndexOp>(loc, v); };
+  unsigned elemBytes = std::max<unsigned>(1, shapedResult.getElementType().getIntOrFloatBitWidth() / 8);
+  int64_t staticRows = 1;
+  bool dynamicRows = false;
+  for (unsigned axis = 0; axis + 1 < rank; ++axis) {
+    if (ShapedType::isDynamic(vecShape[axis]))
+      dynamicRows = true;
+    else
+      staticRows *= vecShape[axis];
+  }
+  Value rowsExtent;
+  auto rows = [&]() -> Value {
+    if (!dynamicRows)
+      return constant(staticRows);
+    if (!rowsExtent) {
+      rowsExtent = constant(1);
+      for (unsigned axis = 0; axis + 1 < rank; ++axis) {
+        Value dim = vecBounds.empty() ? constant(vecShape[axis]) : vecBounds[axis];
+        rowsExtent = rewriter.create<arith::MulIOp>(loc, rowsExtent, dim);
+      }
+    }
+    return rowsExtent;
+  };
+
+  // The source may carry a padded trailing identity axis. After the ferry,
+  // the dropped singleton is last, so preserve the padding on the axis
+  // immediately before it while flattening the physical allocation. The
+  // ferry reorders the tracked shape, so the allocation shape arrives
+  // reordered the same way and keeps matching it axis by axis.
+  SmallVector<int64_t> vecAllocShape = vecAlloc;
+  if (!dynamicRows && rank > 1) {
+    unsigned paddedAxis = rank - 1;
+    if (vecShape.back() == 1)
+      paddedAxis = rank - 2;
+    vecAllocShape[paddedAxis] = alignExtentTo32B(vecAllocShape[paddedAxis], elemBytes);
+  }
+  int64_t allocProduct = std::accumulate(vecAllocShape.begin(), vecAllocShape.end(), static_cast<int64_t>(1),
+                                         std::multiplies<int64_t>());
+  SmallVector<int64_t> vecFlatShape = {dynamicRows ? ShapedType::kDynamic : staticRows, 1};
+  SmallVector<Value> vecFlatExtents;
+  SmallVector<Value> vecFlatValid;
+  if (dynamicRows) {
+    vecFlatExtents.push_back(rows());
+    vecFlatExtents.push_back(constant(1));
+  } else {
+    vecFlatExtents.push_back(constant(allocProduct));
+    vecFlatExtents.push_back(constant(1));
+    vecFlatValid.push_back(constant(staticRows));
+    vecFlatValid.push_back(constant(1));
+  }
+  Value vecFlat = rewriter.create<pypto::ReshapeOp>(loc, shapedResult.clone(vecFlatShape), vec,
+                                                    ValueRange(vecFlatExtents), ValueRange(vecFlatValid));
+
+  bool dynamicCols = ShapedType::isDynamic(destShape.back());
+  int64_t carrierCols = dynamicCols ? 0 : alignExtentTo32B(destShape.back(), elemBytes);
+  // The carrier's result type spells the valid window ([rows, destCols])
+  // so the outbound reshape conserves elements across types; the
+  // 32B-aligned allocation rides in `tile_full`'s extents operands,
+  // which the emitpy lowering forwards verbatim as the `pl.tile.full`
+  // shape list. `RowExpandAdd` keeps the carrier's type, so the
+  // expanded tile carries the same valid/alloc split.
+  SmallVector<int64_t> carrierFlatShape = vecFlatShape;
+  carrierFlatShape.back() = dynamicCols ? ShapedType::kDynamic : destShape.back();
+  SmallVector<Value> carrierFlatBounds;
+  if (dynamicRows || dynamicCols) {
+    carrierFlatBounds.push_back(rows());
+    carrierFlatBounds.push_back(dynamicCols ? destBounds.back() : constant(carrierCols));
+  }
+  Value carrier = rewriter.create<pypto::TileFullOp>(loc, shapedResult.clone(carrierFlatShape),
+                                                     rewriter.getStringAttr(zero), ValueRange(carrierFlatBounds))
+                    .getResult();
+  Value expanded = rewriter.create<pypto::RowExpandAddOp>(loc, shapedResult.clone(carrierFlatShape), carrier, vecFlat)
+                     .getResult();
+  SmallVector<Value> resultExtents;
+  SmallVector<Value> resultValid;
+  appendRowExpandResultExtents(destShape, destBounds, dynamicCols, carrierCols, rank, loc, resultExtents, resultValid,
+                               rewriter);
+  return rewriter.create<pypto::ReshapeOp>(loc, shapedResult.clone(destShape), expanded, ValueRange(resultExtents),
+                                           ValueRange(resultValid))
+    .getResult();
+}
+
 /// Lifts one dropped axis of a general lift. The expand family only
-/// broadcasts the last two dimensions, so a dropped axis outside them is
-/// ferried to the tail with `pypto.transpose` swaps, lifted with a row
-/// expand against a zero carrier, and ferried back.
-static Value liftDroppedAxis(ShapedType shapedResult, Location loc, StringRef zero, unsigned rank,
-                             unsigned dropped, Value cur, const SmallVector<int64_t> &curShape,
+/// broadcasts the last two dimensions and its vector operand contract
+/// is rank-2 ([rows, 1] for a row expand, [1, cols] for a col expand),
+/// so a dropped axis outside them is ferried to the tail, the
+/// alignment axes ahead of the broadcast one are collapsed with
+/// `pypto.reshape` onto a rank-2 column vector, lifted with a row
+/// expand against a zero carrier, and restored. The dropped axis is
+/// always a singleton, so the outbound ferry reorders only the
+/// tracked shape — a singleton swap leaves the linear element order
+/// untouched — while the restore, whose axis now carries the real
+/// extent, keeps its `pypto.transpose` swaps.
+static Value liftDroppedAxis(ShapedType shapedResult, Location loc, StringRef zero, unsigned rank, unsigned dropped,
+                             Value cur, const SmallVector<int64_t> &curShape, const SmallVector<int64_t> &curAllocShape,
                              const SmallVector<Value> &curBounds, const SmallVector<int64_t> &targetShape,
                              const SmallVector<Value> &targetBounds, ConversionPatternRewriter &rewriter) {
-  auto swapAxes = [&](SmallVector<int64_t> &shape, SmallVector<Value> &bounds, Value &value, unsigned a,
-                      unsigned b) {
+  auto swapAxes = [&](SmallVector<int64_t> &shape, SmallVector<Value> &bounds, Value &value, unsigned a, unsigned b) {
     std::swap(shape[a], shape[b]);
     if (!bounds.empty()) {
       std::swap(bounds[a], bounds[b]);
     }
-    value = rewriter.create<pypto::TransposeOp>(loc, shapedResult.clone(shape), value,
-                                                static_cast<uint64_t>(a), static_cast<uint64_t>(b));
+    value = rewriter.create<pypto::TransposeOp>(loc, shapedResult.clone(shape), value, static_cast<uint64_t>(a),
+                                                static_cast<uint64_t>(b));
   };
-  if (dropped + 2 >= rank) {
-    // Tail position (last or second-to-last axis): the expand
-    // family broadcasts it directly against a zero carrier.
-    Value carrier = rewriter.create<pypto::TileFullOp>(loc, shapedResult.clone(targetShape),
-                                                       rewriter.getStringAttr(zero), ValueRange(targetBounds))
-                      .getResult();
-    return dropped + 1 == rank
-             ? rewriter.create<pypto::RowExpandAddOp>(loc, shapedResult.clone(targetShape), carrier, cur).getResult()
-             : rewriter.create<pypto::ColExpandAddOp>(loc, shapedResult.clone(targetShape), carrier, cur)
-                 .getResult();
+  if (rank == 2) {
+    // A rank-2 working shape already meets the expand family's vector
+    // contract — [rows, 1] for the last axis, [1, cols] for the
+    // second-to-last — so the dropped axis broadcasts directly against
+    // a zero carrier.
+    auto curShaped = cast<ShapedType>(cur.getType());
+    Type expandType = curShaped.clone(targetShape);
+    Value carrier =
+      rewriter.create<pypto::TileFullOp>(loc, expandType, rewriter.getStringAttr(zero), ValueRange(targetBounds))
+        .getResult();
+    Value expanded = dropped + 1 == rank
+                       ? rewriter.create<pypto::RowExpandAddOp>(loc, expandType, carrier, cur).getResult()
+                       : rewriter.create<pypto::ColExpandAddOp>(loc, expandType, carrier, cur).getResult();
+    if (expandType != shapedResult.clone(targetShape)) {
+      expanded = rewriter.create<pypto::ReinterpretViewOp>(loc, shapedResult.clone(targetShape), expanded).getResult();
+    }
+    return expanded;
+  }
+  if (dropped + 1 == rank) {
+    // Tail position: the dropped axis already sits last, so only the
+    // alignment axes ahead of it need collapsing.
+    return rowExpandOntoCarrier(shapedResult, loc, zero, rank, cur, curShape, curBounds, curAllocShape, targetShape,
+                                targetBounds, rewriter);
   }
   // Ferry the dropped axis to the tail, row-expand there, and
-  // ferry back.
+  // ferry back. The dropped axis is always a singleton, so ferrying
+  // it is an identity permutation on the linear element order: the
+  // outbound `pypto.transpose` swaps are elided and only the tracked
+  // shape/bounds reordered — the flatten reshape reads the same
+  // linear buffer either way. The allocation shape ferries along so
+  // the flatten still bounds-checks the same physical tile.
   SmallVector<int64_t> vecShape = curShape;
   SmallVector<Value> vecBounds = curBounds;
-  Value vec = cur;
+  SmallVector<int64_t> vecAlloc = curAllocShape;
   for (unsigned axis = dropped; axis + 1 < rank; ++axis) {
-    swapAxes(vecShape, vecBounds, vec, axis, axis + 1);
-  }
-  SmallVector<int64_t> carrierShape = targetShape;
-  SmallVector<Value> carrierBounds = targetBounds;
-  for (unsigned axis = dropped; axis + 1 < rank; ++axis) {
-    std::swap(carrierShape[axis], carrierShape[axis + 1]);
-    if (!carrierBounds.empty()) {
-      std::swap(carrierBounds[axis], carrierBounds[axis + 1]);
+    std::swap(vecShape[axis], vecShape[axis + 1]);
+    std::swap(vecAlloc[axis], vecAlloc[axis + 1]);
+    if (!vecBounds.empty()) {
+      std::swap(vecBounds[axis], vecBounds[axis + 1]);
     }
   }
-  Value carrier = rewriter.create<pypto::TileFullOp>(loc, shapedResult.clone(carrierShape),
-                                                     rewriter.getStringAttr(zero), ValueRange(carrierBounds))
-                    .getResult();
-  Value expanded =
-    rewriter.create<pypto::RowExpandAddOp>(loc, shapedResult.clone(carrierShape), carrier, vec).getResult();
+  Value vec = cur;
+  SmallVector<int64_t> destShape = targetShape;
+  SmallVector<Value> destBounds = targetBounds;
+  for (unsigned axis = dropped; axis + 1 < rank; ++axis) {
+    std::swap(destShape[axis], destShape[axis + 1]);
+    if (!destBounds.empty()) {
+      std::swap(destBounds[axis], destBounds[axis + 1]);
+    }
+  }
+  Value expanded = rowExpandOntoCarrier(shapedResult, loc, zero, rank, vec, vecShape, vecBounds, vecAlloc, destShape,
+                                        destBounds, rewriter);
   for (unsigned axis = rank - 1; axis-- > dropped;) {
-    swapAxes(carrierShape, carrierBounds, expanded, axis, axis + 1);
+    swapAxes(destShape, destBounds, expanded, axis, axis + 1);
   }
   return expanded;
+}
+
+/// Per-axis runtime bounds for a general lift: a dropped axis takes the
+/// broadcast's aligned extent (the extent the lift expands it to), an
+/// identity-mapped axis the source tile's allocated extent — the opening
+/// reshape conserves the source's physical elements, so its view and
+/// every transposed or expanded derivative of it must keep the padded
+/// bound the source's producing read or reduction allocated, never the
+/// broadcast's aligned max size (a valid bound). The max size stands in
+/// when the allocation is not statically resolvable.
+static SmallVector<Value> liftAxisBounds(const SmallVector<bool> &isDropped, unsigned rank,
+                                         npuvector::NPUVectorType srcType,
+                                         const std::optional<SmallVector<int64_t>> &srcAlloc,
+                                         const SmallVectorImpl<Value> &extents, Location loc,
+                                         ConversionPatternRewriter &rewriter) {
+  auto constant = [&](int64_t v) { return rewriter.create<arith::ConstantIndexOp>(loc, v); };
+  SmallVector<Value> axisBounds(rank);
+  unsigned boundSourceDim = 0;
+  for (unsigned resultDim = 0; resultDim < rank; ++resultDim) {
+    if (isDropped[resultDim] || !ShapedType::isDynamic(srcType.getDimSize(boundSourceDim)) || !srcAlloc ||
+        boundSourceDim >= srcAlloc->size()) {
+      axisBounds[resultDim] = extents[resultDim];
+    } else {
+      axisBounds[resultDim] = constant((*srcAlloc)[boundSourceDim]);
+    }
+    if (!isDropped[resultDim]) {
+      ++boundSourceDim;
+    }
+  }
+  return axisBounds;
+}
+
+/// A statically-shaped working view over a source whose allocated shape
+/// resolves past it conserves the source's physical elements: the reshape
+/// views the allocation (extents, e.g. [1,8,32] keeping a padded cmps'
+/// 256 elements) while the valid extents name the working shape, so the
+/// slice the lowering renders keeps every downstream ferry/expand on the
+/// valid region alone — the same conservation the dynamic-shape extents
+/// spell through the working shape's bounds. An unpadded or unresolvable
+/// source keeps the plain reshape.
+static void appendLiftConservedExtents(const SmallVector<bool> &isDropped, unsigned rank, unsigned srcRank,
+                                       const std::optional<SmallVector<int64_t>> &srcAlloc,
+                                       const SmallVector<int64_t> &curShape, Location loc,
+                                       SmallVectorImpl<Value> &curExtents, SmallVectorImpl<Value> &curValid,
+                                       ConversionPatternRewriter &rewriter) {
+  if (llvm::none_of(curShape, [](int64_t d) { return ShapedType::isDynamic(d); }) && srcAlloc &&
+      srcAlloc->size() == srcRank &&
+      llvm::none_of(*srcAlloc, [](int64_t d) { return ShapedType::isDynamic(d); })) {
+    SmallVector<int64_t> allocShape(rank);
+    int64_t allocProduct = 1;
+    int64_t validProduct = 1;
+    unsigned allocSourceDim = 0;
+    for (unsigned resultDim = 0; resultDim < rank; ++resultDim) {
+      allocShape[resultDim] = isDropped[resultDim] ? 1 : (*srcAlloc)[allocSourceDim++];
+      allocProduct *= allocShape[resultDim];
+      validProduct *= curShape[resultDim];
+    }
+    if (allocProduct > validProduct) {
+      for (unsigned resultDim = 0; resultDim < rank; ++resultDim) {
+        curExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, allocShape[resultDim]));
+        curValid.push_back(rewriter.create<arith::ConstantIndexOp>(loc, curShape[resultDim]));
+      }
+    }
+  }
 }
 
 /// General lift onto any rank: `dimension` maps every source axis
@@ -1858,8 +3180,9 @@ static Value liftDroppedAxis(ShapedType shapedResult, Location loc, StringRef ze
 /// every remaining axis is dropped — the lift may span any rank
 /// jump and drop axes anywhere. The expand family only broadcasts
 /// the last two dimensions, so a dropped axis outside them is
-/// ferried to the tail with `pypto.transpose` swaps, lifted with a
-/// row expand against a zero carrier, and ferried back.
+/// ferried to the tail, lifted with a row expand against a zero
+/// carrier, and ferried back (the outbound ferry is shape-only,
+/// the dropped axis being a singleton).
 static LogicalResult materializeGeneralLift(npuvector::BroadcastOp op, ShapedType resultType,
                                             npuvector::NPUVectorType srcType, ArrayRef<int64_t> dimension,
                                             ConversionPatternRewriter &rewriter) {
@@ -1881,6 +3204,8 @@ static LogicalResult materializeGeneralLift(npuvector::BroadcastOp op, ShapedTyp
   }
   auto shapedResult = cast<ShapedType>(convertedResult);
   auto constant = [&](int64_t v) { return rewriter.create<arith::ConstantIndexOp>(loc, v); };
+  auto srcAlloc = tileAllocationShape(op.getSource());
+  SmallVector<Value> axisBounds = liftAxisBounds(isDropped, rank, srcType, srcAlloc, *extents, loc, rewriter);
   // Per-dimension runtime bounds of a working shape, one value per
   // axis; an all-static shape carries none, mirroring the pypto
   // ops' empty-extents convention.
@@ -1890,20 +3215,29 @@ static LogicalResult materializeGeneralLift(npuvector::BroadcastOp op, ShapedTyp
     }
     SmallVector<Value> bounds;
     for (auto [axis, dim] : llvm::enumerate(shape)) {
-      bounds.push_back(ShapedType::isDynamic(dim) ? (*extents)[axis] : constant(dim));
+      bounds.push_back(ShapedType::isDynamic(dim) ? axisBounds[axis] : constant(dim));
     }
     return bounds;
   };
   // Start from the source reshaped with a singleton at every dropped
   // axis; identity axes carry the source extents over.
   SmallVector<int64_t> curShape;
+  SmallVector<int64_t> curAllocShape;
   unsigned sourceDim = 0;
   for (unsigned resultDim = 0; resultDim < rank; ++resultDim) {
-    curShape.push_back(isDropped[resultDim] ? 1 : srcType.getDimSize(sourceDim++));
+    curShape.push_back(isDropped[resultDim] ? 1 : srcType.getDimSize(sourceDim));
+    curAllocShape.push_back(
+      isDropped[resultDim] ? 1 : (srcAlloc ? (*srcAlloc)[sourceDim] : srcType.getDimSize(sourceDim)));
+    if (!isDropped[resultDim])
+      ++sourceDim;
   }
   SmallVector<Value> curBounds = makeBounds(curShape);
-  Value cur =
-    rewriter.create<pypto::ReshapeOp>(loc, shapedResult.clone(curShape), op.getSource(), ValueRange(curBounds));
+  SmallVector<Value> curExtents;
+  SmallVector<Value> curValid;
+  appendLiftConservedExtents(isDropped, rank, srcRank, srcAlloc, curShape, loc, curExtents, curValid, rewriter);
+  Value cur = rewriter.create<pypto::ReshapeOp>(loc, shapedResult.clone(curShape), op.getSource(),
+                                                curExtents.empty() ? ValueRange(curBounds) : ValueRange(curExtents),
+                                                ValueRange(curValid));
   std::string zero = isa<FloatType>(resultType.getElementType()) ? "0.0" : "0";
   // Lift one dropped axis at a time, tail first so every expand only
   // meets already-lifted axes behind the one it broadcasts.
@@ -1912,13 +3246,129 @@ static LogicalResult materializeGeneralLift(npuvector::BroadcastOp op, ShapedTyp
     SmallVector<int64_t> targetShape = curShape;
     targetShape[dropped] = resultType.getDimSize(dropped);
     SmallVector<Value> targetBounds = makeBounds(targetShape);
-    cur = liftDroppedAxis(shapedResult, loc, zero, rank, dropped, cur, curShape, curBounds, targetShape,
+    cur = liftDroppedAxis(shapedResult, loc, zero, rank, dropped, cur, curShape, curAllocShape, curBounds, targetShape,
                           targetBounds, rewriter);
     curShape = std::move(targetShape);
+    curAllocShape = curShape;
     curBounds = std::move(targetBounds);
   }
   rewriter.replaceOp(op, cur);
   return success();
+}
+
+/// Collects the per-dimension valid extents of a dynamic broadcast
+/// result: each dynamic dimension names its `dynamicSizes` entry (under
+/// either arity convention — one entry per dimension or one per `?`),
+/// each static dimension its type extent. An empty result means the
+/// whole result is statically fully valid, so nothing needs narrowing.
+static SmallVector<Value> broadcastValidExtents(npuvector::BroadcastOp op, ShapedType resultType, Location loc,
+                                                ConversionPatternRewriter &rewriter) {
+  SmallVector<Value> validExtents;
+  if (resultType.hasStaticShape()) {
+    return validExtents;
+  }
+  ValueRange dynamicSizes = op.getDynamicSizes();
+  unsigned rank = resultType.getRank();
+  unsigned numDynamic = llvm::count(resultType.getShape(), ShapedType::kDynamic);
+  bool perDim = dynamicSizes.size() == rank && rank != numDynamic;
+  unsigned dynamicIndex = 0;
+  for (auto [axis, dim] : llvm::enumerate(resultType.getShape())) {
+    if (ShapedType::isDynamic(dim)) {
+      validExtents.push_back(dynamicSizes[perDim ? axis : dynamicIndex++]);
+    } else {
+      validExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, dim));
+    }
+  }
+  return validExtents;
+}
+
+/// PTOAS lays every tile in the block onto one grid, so the constant or
+/// carrier a scalar broadcast materializes must also allocate the padded
+/// shape of the siblings its result merges with downstream -- e.g. a
+/// [3060] one against a Taylor chain over a load that pads to [3064] --
+/// or the merge mismatches at compile time, the same sibling raise
+/// `ArithConstantPattern` spells for splat constants. A static result
+/// spells no extents, so the raise materializes them per axis; a dynamic
+/// result already carries the sibling grid through `buildBroadcastExtents`.
+///
+/// The raised `tile_full` allocates the padded sibling shape while the
+/// broadcast's own result type stays the valid contract. Name that shape
+/// as the valid extents so the re-view below restores it: a consumer
+/// that pairs the result with a loaded sibling -- e.g. `tile.select`,
+/// whose branches must agree on valid extents -- merges tiles that all
+/// carry the IR shape as their valid region, never the raised
+/// allocation.
+static void raiseStaticSiblingPad(Value result, ShapedType resultType, Location loc, SmallVectorImpl<Value> &extents,
+                                  SmallVectorImpl<Value> &validExtents, ConversionPatternRewriter &rewriter) {
+  if (!extents.empty() || !resultType.hasStaticShape()) {
+    return;
+  }
+  SmallVector<int64_t> siblingBounds;
+  collectSiblingAllocationBounds(result, 0, siblingBounds);
+  if (siblingBounds.size() != static_cast<size_t>(resultType.getRank())) {
+    return;
+  }
+  bool needsPad = false;
+  for (auto [axis, dim] : llvm::enumerate(resultType.getShape())) {
+    if (!ShapedType::isDynamic(siblingBounds[axis]) && siblingBounds[axis] > dim) {
+      needsPad = true;
+      break;
+    }
+  }
+  if (!needsPad) {
+    return;
+  }
+  for (auto [axis, dim] : llvm::enumerate(resultType.getShape())) {
+    int64_t size = dim;
+    if (!ShapedType::isDynamic(siblingBounds[axis])) {
+      size = std::max(size, siblingBounds[axis]);
+    }
+    extents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, size));
+  }
+  std::transform(resultType.getShape().begin(), resultType.getShape().end(), std::back_inserter(validExtents),
+                 [&](int64_t dim) { return rewriter.create<arith::ConstantIndexOp>(loc, dim); });
+}
+
+/// The reshaped vector of a rank-1→rank-2 lift: [rows, 1] for a row
+/// lift, [1, cols] for a column lift; the lifted extent names the source
+/// tile's allocated extent, falling back to an aligned bound when the
+/// allocation is not statically resolvable.
+static std::pair<Type, SmallVector<Value>> liftedVectorView(npuvector::BroadcastOp op,
+                                                            npuvector::NPUVectorType srcType, int64_t srcExtent,
+                                                            unsigned axis, const SmallVectorImpl<Value> &extents,
+                                                            bool rowLift, Location loc,
+                                                            ConversionPatternRewriter &rewriter) {
+  Value one = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(1));
+  Value extent;
+  if (ShapedType::isDynamic(srcExtent)) {
+    if (auto shape = tileAllocationShape(op.getSource()); shape && shape->size() == 1) {
+      extent = rewriter.create<arith::ConstantIndexOp>(loc, (*shape)[0]);
+    } else {
+      extent = extents[axis];
+    }
+  } else {
+    // Static source extent: the allocated bound the view must match.
+    unsigned elemBytes = srcType.getElementType().getIntOrFloatBitWidth() / 8;
+    int64_t bound;
+    if (auto shape = tileAllocationShape(op.getSource()); shape && shape->size() == 1) {
+      bound = (*shape)[0];
+    } else {
+      bound = alignExtentTo32B(srcExtent, elemBytes);
+    }
+    extent = rewriter.create<arith::ConstantIndexOp>(loc, bound);
+  }
+  Type vecType;
+  SmallVector<Value> vecExtents;
+  if (rowLift) {
+    vecType = srcType.clone(SmallVector<int64_t>{ShapedType::kDynamic, 1});
+    vecExtents.push_back(extent);
+    vecExtents.push_back(one);
+  } else {
+    vecType = srcType.clone(SmallVector<int64_t>{1, ShapedType::kDynamic});
+    vecExtents.push_back(one);
+    vecExtents.push_back(extent);
+  }
+  return {vecType, vecExtents};
 }
 
 /// Materializes a rank-1 tile broadcast lifted onto a rank-2 result:
@@ -1930,11 +3380,20 @@ static LogicalResult materializeGeneralLift(npuvector::BroadcastOp op, ShapedTyp
 /// arith consumer, or a sibling broadcast that already rewrote the
 /// shared consumer into the expand family.
 ///
-/// The reshaped vector's dynamic extent mirrors the carrier's (the
-/// aligned `maxSizes` bound `buildBroadcastExtents` produces) so the
-/// expand combines same-shaped tiles; the identity-mapped axis must
-/// agree on extent and staticality, or a constant source could be
-/// reshaped past its allocation bound.
+/// The reshaped vector's lifted extent names the source tile's
+/// allocated extent — `pl.reshape` conserves physical elements, so the
+/// view must match the padded bound the source's producing read or
+/// reduction allocated, never the broadcast's aligned max size (a
+/// valid bound); the max size stands in when the allocation is not
+/// statically resolvable. A static source extent is a valid bound too:
+/// the view carries the allocated extent as a constant the emitpy
+/// lowering renders literally, while the IR type stays dynamic so the
+/// expand's strict row/column count check exempts it. The carrier
+/// keeps the aligned bound `buildBroadcastExtents` produces — PTOAS
+/// pads a `tile_full` allocation onto the same row grid, so the
+/// expand still combines same-shaped tiles. The identity-mapped axis
+/// must agree on extent and staticality, or a constant source could
+/// be reshaped past its allocation bound.
 static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, ShapedType resultType,
                                                 ConversionPatternRewriter &rewriter) {
   ArrayRef<int64_t> dimension = op.getDimension();
@@ -1973,32 +3432,53 @@ static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, Shape
     return failure();
   }
   // The reshaped vector: [rows, 1] for a row lift, [1, cols] for a
-  // column lift; a dynamic extent rides the carrier's.
-  Type vecType;
-  SmallVector<Value> vecExtents;
-  if (ShapedType::isDynamic(srcExtent)) {
-    Value one = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(1));
-    if (rowLift) {
-      vecType = srcType.clone(SmallVector<int64_t>{ShapedType::kDynamic, 1});
-      vecExtents.push_back((*extents)[0]);
-      vecExtents.push_back(one);
-    } else {
-      vecType = srcType.clone(SmallVector<int64_t>{1, ShapedType::kDynamic});
-      vecExtents.push_back(one);
-      vecExtents.push_back((*extents)[1]);
-    }
-  } else if (rowLift) {
-    vecType = srcType.clone(SmallVector<int64_t>{srcExtent, 1});
-  } else {
-    vecType = srcType.clone(SmallVector<int64_t>{1, srcExtent});
-  }
-  Value vec = rewriter.create<pypto::ReshapeOp>(loc, vecType, op.getSource(), ValueRange(vecExtents));
+  // column lift; the lifted extent names the source tile's allocated
+  // extent, falling back to an aligned bound when the allocation is
+  // not statically resolvable.
+  auto [vecType, vecExtents] = liftedVectorView(op, srcType, srcExtent, axis, *extents, rowLift, loc, rewriter);
+  // The reshaped vector stays a bare reshape: its extents spell the
+  // allocated `[rows, 1]` bound literally, so the runtime derives a
+  // clean `[srcValid, 1]` valid region (the unit-axis rank change) and
+  // reads the column-major layout a static `[N, 1]` literal implies —
+  // exactly the src1 contract the expand families check for. Naming
+  // valid extents instead would slice a dynamic `[?, 1]` view whose
+  // row-major layout fails the packed-column check.
+  Value vec = rewriter.create<pypto::ReshapeOp>(loc, vecType, op.getSource(), ValueRange(vecExtents), ValueRange());
   std::string zero = isa<FloatType>(resultType.getElementType()) ? "0.0" : "0";
   Value carrier =
     rewriter.create<pypto::TileFullOp>(loc, convertedResult, rewriter.getStringAttr(zero), ValueRange(*extents))
       .getResult();
-  Value result = rowLift ? rewriter.create<pypto::RowExpandAddOp>(loc, convertedResult, carrier, vec).getResult()
-                         : rewriter.create<pypto::ColExpandAddOp>(loc, convertedResult, carrier, vec).getResult();
+  SmallVector<Value> carrierValid = broadcastValidExtents(op, resultType, loc, rewriter);
+  Value result;
+  if (rowLift) {
+    // A fresh `tile_full` is valid everywhere, but row expand demands
+    // provably equal valid extents between the carrier and the reshaped
+    // vector. Re-view the carrier with the broadcast's own dynamic sizes
+    // — the values the source's valid extents trace to — so the runtime's
+    // row count proof equates the two; the emitpy lowering renders the
+    // re-view as a reshape+slice sandwich.
+    if (!carrierValid.empty()) {
+      carrier =
+        rewriter.create<pypto::ReshapeOp>(loc, convertedResult, carrier, ValueRange(*extents), ValueRange(carrierValid))
+          .getResult();
+    }
+    result = rewriter.create<pypto::RowExpandAddOp>(loc, convertedResult, carrier, vec).getResult();
+  } else {
+    // Column expand mirrors that with one asymmetry: its codegen cannot
+    // read a pto.subview operand and materializes one into a pto.textract,
+    // whose element type A5 restricts to the fp8/f16/bf16/f32 and int8
+    // families — an i32 carrier dies right there. Feed the expand the
+    // bare tile_full (zeros everywhere, so the rows past the valid region
+    // just carry replicated columns) and re-view the expand's fresh
+    // result instead: consumers outside the tcolexpand family read
+    // subview SSAs natively.
+    result = rewriter.create<pypto::ColExpandAddOp>(loc, convertedResult, carrier, vec).getResult();
+    if (!carrierValid.empty()) {
+      result =
+        rewriter.create<pypto::ReshapeOp>(loc, convertedResult, result, ValueRange(*extents), ValueRange(carrierValid))
+          .getResult();
+    }
+  }
   rewriter.replaceOp(op, result);
   return success();
 }
@@ -2058,6 +3538,28 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
     if (failed(extents)) {
       return failure();
     }
+    SmallVector<Value> validExtents;
+    if constexpr (std::is_same_v<BroadcastOp, npuvector::BroadcastOp>) {
+      validExtents = broadcastValidExtents(op, resultType, loc, rewriter);
+    }
+
+    // PTOAS lays every tile in the block onto one grid, so the constant or
+    // carrier a scalar broadcast materializes must also allocate the padded
+    // shape of the siblings its result merges with downstream; a static
+    // result spells no extents, so the raise materializes them per axis.
+    raiseStaticSiblingPad(op.getResult(), resultType, op.getLoc(), *extents, validExtents, rewriter);
+
+    auto materializeFull = [&](StringRef value) -> Value {
+      Value full =
+        rewriter.create<pypto::TileFullOp>(loc, convertedResult, rewriter.getStringAttr(value), ValueRange(*extents))
+          .getResult();
+      if (validExtents.empty()) {
+        return full;
+      }
+      return rewriter
+        .create<pypto::ReshapeOp>(loc, convertedResult, full, ValueRange(*extents), ValueRange(validExtents))
+        .getResult();
+    };
 
     std::optional<std::string> constText;
     if (auto constOp = op.getSource().template getDefiningOp<arith::ConstantOp>()) {
@@ -2072,15 +3574,10 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
 
     Value result;
     if (constText) {
-      result =
-        rewriter
-          .create<pypto::TileFullOp>(loc, convertedResult, rewriter.getStringAttr(*constText), ValueRange(*extents))
-          .getResult();
+      result = materializeFull(*constText);
     } else {
       std::string zero = isa<FloatType>(sourceType) ? "0.0" : "0";
-      Value carrier =
-        rewriter.create<pypto::TileFullOp>(loc, convertedResult, rewriter.getStringAttr(zero), ValueRange(*extents))
-          .getResult();
+      Value carrier = materializeFull(zero);
       result = rewriter.create<pypto::AddOp>(loc, convertedResult, carrier, op.getSource()).getResult();
     }
     rewriter.replaceOp(op, result);
@@ -2149,8 +3646,16 @@ class TileBroadcastFusionPattern : public OpConversionPattern<npuvector::Broadca
     if (failed(lifted)) {
       return rewriter.notifyMatchFailure(op, "dynamic broadcast must carry per-dimension max sizes");
     }
+    // The reshape stays bare like `materializeLiftedBroadcast`: its
+    // extents spell the allocated bound literally, so the runtime derives
+    // a clean `[srcValid, 1]` valid region (the unit-axis rank change)
+    // and reads the column-major layout a static `[N, 1]` literal implies
+    // — the src1 contract the expand families check for. Naming valid
+    // extents instead would degrade into a reshape+slice whose window
+    // inference materializes `min(srcValid, bound)`, and the expand's
+    // row/column count proof could no longer equate the two sides.
     Value vec = rewriter.create<pypto::ReshapeOp>(op.getLoc(), lifted->first, op.getSource(),
-                                                  ValueRange(lifted->second));
+                                                  ValueRange(lifted->second), ValueRange());
     for (auto [user, tile] : consumers) {
       // The expand lands at the consumer, not at the broadcast: the
       // tile operand may be defined between the two, and an expand
@@ -2186,12 +3691,20 @@ class TileBroadcastFusionPattern : public OpConversionPattern<npuvector::Broadca
 
   /// Builds the reshaped rank-2 type and runtime extents for the lifted
   /// vector: `[rows, 1]` for a row lift, `[1, cols]` for a column lift.
-  /// A dynamic extent takes the broadcast's aligned max size; a static
-  /// one mirrors the source extent and carries no runtime bounds.
+  /// The reshaped extent names the source tile's allocated extent —
+  /// `pl.reshape` conserves physical elements, so the view must match
+  /// the padded bound the source's producing read or reduction
+  /// allocated, never the broadcast's aligned max size (a valid bound);
+  /// the max size stands in when the allocation is not statically
+  /// resolvable. A static source extent is a valid bound too: PTOAS
+  /// allocates every tile at the aligned bound, so the view still
+  /// carries the allocated extent, spelled as a constant the emitpy
+  /// lowering renders literally; the IR type stays dynamic so the
+  /// expand's strict row/column count check exempts it.
   static FailureOr<std::pair<Type, SmallVector<Value>>> buildLiftedVector(npuvector::BroadcastOp op,
-                                                                         npuvector::NPUVectorType srcType,
-                                                                         bool rowLift,
-                                                                         ConversionPatternRewriter &rewriter) {
+                                                                          npuvector::NPUVectorType srcType,
+                                                                          bool rowLift,
+                                                                          ConversionPatternRewriter &rewriter) {
     Location loc = op.getLoc();
     int64_t srcExtent = srcType.getDimSize(0);
     if (ShapedType::isDynamic(srcExtent)) {
@@ -2200,30 +3713,46 @@ class TileBroadcastFusionPattern : public OpConversionPattern<npuvector::Broadca
         return failure();
       }
       Value one = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(1));
-      // Pad a constant max size to whole 32-byte rows, matching the
-      // aligned extent a dynamic transfer_read allocates, so the
-      // reshape stays shape-compatible with the source tile (42 -> 48
-      // for FP32). Mirrors `buildBroadcastExtents`.
-      auto alignedMax = [&](Value max) -> Value {
+      Value extent;
+      if (auto shape = tileAllocationShape(op.getSource()); shape && shape->size() == 1) {
+        extent = rewriter.create<arith::ConstantIndexOp>(loc, (*shape)[0]);
+      } else {
+        // Unresolvable allocation: pad a constant max size to whole
+        // 32-byte rows, matching the aligned extent a dynamic
+        // transfer_read allocates, so the reshape stays
+        // shape-compatible with the source tile (42 -> 48 for FP32).
+        // Mirrors `buildBroadcastExtents`.
+        Value max = rowLift ? maxSizes[0] : maxSizes[1];
         if (auto bound = constIndexValue(max)) {
           unsigned elemBytes = srcType.getElementType().getIntOrFloatBitWidth() / 8;
-          return rewriter.create<arith::ConstantIndexOp>(loc, alignExtentTo32B(*bound, elemBytes));
+          extent = rewriter.create<arith::ConstantIndexOp>(loc, alignExtentTo32B(*bound, elemBytes));
+        } else {
+          extent = max;
         }
-        return max;
-      };
+      }
       if (rowLift) {
         Type vecType = srcType.clone(SmallVector<int64_t>{ShapedType::kDynamic, 1});
-        return std::make_pair(vecType, SmallVector<Value>{alignedMax(maxSizes[0]), one});
+        return std::make_pair(vecType, SmallVector<Value>{extent, one});
       }
       Type vecType = srcType.clone(SmallVector<int64_t>{1, ShapedType::kDynamic});
-      return std::make_pair(vecType, SmallVector<Value>{one, alignedMax(maxSizes[1])});
+      return std::make_pair(vecType, SmallVector<Value>{one, extent});
     }
+    // Static source extent: the allocated bound the view must match.
+    unsigned elemBytes = srcType.getElementType().getIntOrFloatBitWidth() / 8;
+    int64_t bound;
+    if (auto shape = tileAllocationShape(op.getSource()); shape && shape->size() == 1) {
+      bound = (*shape)[0];
+    } else {
+      bound = alignExtentTo32B(srcExtent, elemBytes);
+    }
+    Value one = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(1));
+    Value extent = rewriter.create<arith::ConstantIndexOp>(loc, bound);
     if (rowLift) {
-      Type vecType = srcType.clone(SmallVector<int64_t>{srcExtent, 1});
-      return std::make_pair(vecType, SmallVector<Value>{});
+      Type vecType = srcType.clone(SmallVector<int64_t>{ShapedType::kDynamic, 1});
+      return std::make_pair(vecType, SmallVector<Value>{extent, one});
     }
-    Type vecType = srcType.clone(SmallVector<int64_t>{1, srcExtent});
-    return std::make_pair(vecType, SmallVector<Value>{});
+    Type vecType = srcType.clone(SmallVector<int64_t>{1, ShapedType::kDynamic});
+    return std::make_pair(vecType, SmallVector<Value>{one, extent});
   }
 
   /// The tile operand `user` expands the broadcast against, or none when
@@ -2317,16 +3846,82 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
 
   /// Reshapes `tile` to `[extent, 1]` (row lift) or `[1, extent]`
   /// (column lift) and expands it onto the zero carrier's geometry.
+  /// The reshaped vector names the source tile's allocated extent --
+  /// `pl.reshape` conserves physical elements, so the view must match
+  /// the padded bound the source's producing read or reduction
+  /// allocated, never the valid extent the result type carries. The IR
+  /// type stays dynamic so the emitpy lowering renders those extents
+  /// literally (a static type would silently print the valid shape
+  /// instead) and the expand's strict row/column count check exempts
+  /// it.
   static Value liftOntoCarrier(Location loc, npuvector::NPUVectorType valueTileType, Value carrier, bool rowLift,
                                Value tile, ConversionPatternRewriter &rewriter) {
     auto tileType = cast<npuvector::NPUVectorType>(tile.getType());
-    Type vecType = rowLift ? tileType.clone(SmallVector<int64_t>{tileType.getDimSize(0), 1})
-                           : tileType.clone(SmallVector<int64_t>{1, tileType.getDimSize(0)});
-    Value vec = rewriter.create<pypto::ReshapeOp>(loc, vecType, tile, ValueRange());
+    unsigned elemBytes = tileType.getElementType().getIntOrFloatBitWidth() / 8;
+    int64_t bound = tileType.getDimSize(0);
+    if (auto shape = tileAllocationShape(tile); shape && shape->size() == 1 && !ShapedType::isDynamic((*shape)[0])) {
+      bound = (*shape)[0];
+    } else {
+      bound = alignExtentTo32B(bound, elemBytes);
+    }
+    Value one = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(1));
+    Value extent = rewriter.create<arith::ConstantIndexOp>(loc, bound);
+    Type vecType;
+    SmallVector<Value> vecExtents;
+    if (rowLift) {
+      vecType = tileType.clone(SmallVector<int64_t>{ShapedType::kDynamic, 1});
+      vecExtents.push_back(extent);
+      vecExtents.push_back(one);
+    } else {
+      vecType = tileType.clone(SmallVector<int64_t>{1, ShapedType::kDynamic});
+      vecExtents.push_back(one);
+      vecExtents.push_back(extent);
+    }
+    Value vec = rewriter.create<pypto::ReshapeOp>(loc, vecType, tile, ValueRange(vecExtents), ValueRange());
     if (rowLift) {
       return rewriter.create<pypto::RowExpandAddOp>(loc, valueTileType, carrier, vec).getResult();
     }
     return rewriter.create<pypto::ColExpandAddOp>(loc, valueTileType, carrier, vec).getResult();
+  }
+
+  /// The aligned bound each result axis allocates (the comparison tile's
+  /// allocated extent on the lifted axis) raised onto the sibling grid:
+  /// PTOAS lays every tile in the block onto one grid, so the zero
+  /// carrier must cover the allocation that grid gives the mask's
+  /// consumers — the allocated extents of the value tiles the guarding
+  /// select combines — never the valid extents the result type carries,
+  /// or the expand below mismatches its [1, 32] view against a [2, 4]
+  /// carrier and `pl.tile.select` mismatches the tiles it guards.
+  static SmallVector<Value> cmpCarrierExtents(ShapedType resultType, npuvector::NPUVectorType lhsType, Value cmpLhs,
+                                              bool rowLift, Location loc, const SmallVectorImpl<ReductionAxisPad> &pads,
+                                              const SmallVectorImpl<int64_t> &siblingBounds,
+                                              ConversionPatternRewriter &rewriter) {
+    unsigned rank = resultType.getRank();
+    unsigned identityAxis = rowLift ? 0 : 1;
+    unsigned elemBytes = lhsType.getElementType().getIntOrFloatBitWidth() / 8;
+    SmallVector<Value> carrierExtents;
+    for (unsigned axis = 0; axis < rank; ++axis) {
+      int64_t bound;
+      if (axis == identityAxis) {
+        // The lifted axis: the comparison tile's allocated extent,
+        // falling back to an aligned bound, so the carrier matches the
+        // reshaped vector the expand combines with it.
+        bound = lhsType.getDimSize(0);
+        if (auto shape = tileAllocationShape(cmpLhs); shape && shape->size() == 1 &&
+                                                        !ShapedType::isDynamic((*shape)[0])) {
+          bound = (*shape)[0];
+        } else {
+          bound = alignExtentTo32B(bound, elemBytes);
+        }
+      } else {
+        bound = padAllocationExtent(resultType.getDimSize(axis), axis, rank, elemBytes, pads);
+      }
+      if (axis < siblingBounds.size() && !ShapedType::isDynamic(siblingBounds[axis])) {
+        bound = std::max(bound, siblingBounds[axis]);
+      }
+      carrierExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, bound));
+    }
+    return carrierExtents;
   }
 
   LogicalResult matchAndRewrite(npuvector::BroadcastOp op, npuvector::BroadcastOp::Adaptor adaptor,
@@ -2364,8 +3959,38 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
     // element type. The lift below promotes a rank-1 tile onto it.
     auto valueTileType = cast<npuvector::NPUVectorType>(lhsType.clone(resultType.getShape()));
     std::string zero = isa<FloatType>(lhsType.getElementType()) ? "0.0" : "0";
-    Value carrier =
-      rewriter.create<pypto::TileFullOp>(loc, valueTileType, rewriter.getStringAttr(zero), ValueRange()).getResult();
+    // PTOAS lays every tile in the block onto one grid, so the zero
+    // carrier must cover the allocation that grid gives the mask's
+    // consumers: the aligned bound each result axis allocates (the
+    // comparison tile's allocated extent on the lifted axis) and the
+    // allocated extents of the value tiles the guarding select
+    // combines -- never the valid extents the result type carries, or
+    // the expand below mismatches its [1, 32] view against a [2, 4]
+    // carrier and `pl.tile.select` mismatches the tiles it guards.
+    unsigned rank = resultType.getRank();
+    unsigned elemBytes = lhsType.getElementType().getIntOrFloatBitWidth() / 8;
+    SmallVector<ReductionAxisPad> pads;
+    collectReductionAxisPads(op->getResult(0), 0, pads);
+    SmallVector<int64_t> siblingBounds;
+    collectBroadcastSiblingBounds(op, rank, siblingBounds);
+    SmallVector<Value> carrierExtents =
+      cmpCarrierExtents(resultType, lhsType, cmpLhs, rowLift, loc, pads, siblingBounds, rewriter);
+    Value carrier = rewriter.create<pypto::TileFullOp>(loc, valueTileType, rewriter.getStringAttr(zero),
+                                                       ValueRange(carrierExtents))
+                        .getResult();
+    // The carrier allocates the padded sibling shape while valueTileType
+    // names the valid contract; re-view it back down to that valid region:
+    // the expand preserves the target tile's valid shape, tile.cmps packs
+    // the source's valid extent into the predicate mask, and tile.select
+    // checks that mask against the valid extents of the value branches it
+    // guards -- a carrier left at the padded valid extent would pack
+    // ceil(32/8) mask columns where the select expects ceil(valid/8).
+    SmallVector<Value> carrierValid;
+    std::transform(resultType.getShape().begin(), resultType.getShape().end(), std::back_inserter(carrierValid),
+                   [&](int64_t dim) { return rewriter.create<arith::ConstantIndexOp>(loc, dim); });
+    carrier = rewriter.create<pypto::ReshapeOp>(loc, valueTileType, carrier, ValueRange(carrierExtents),
+                                                ValueRange(carrierValid))
+                  .getResult();
     Value liftedLhs = liftOntoCarrier(loc, valueTileType, carrier, rowLift, cmpLhs, rewriter);
     // A scalar rhs re-rides the tile-scalar comparison; a tile rhs lifts.
     // A rhs that merely broadcasts a scalar passes through to that
@@ -2381,8 +4006,7 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
     if (isa<VectorType, npuvector::NPUVectorType>(finalRhs.getType())) {
       finalRhs = liftOntoCarrier(loc, valueTileType, carrier, rowLift, finalRhs, rewriter);
     }
-    Value mask =
-      rewriter.create<pypto::CmpOp>(loc, op->getResult(0).getType(), *predicate, liftedLhs, finalRhs);
+    Value mask = rewriter.create<pypto::CmpOp>(loc, op->getResult(0).getType(), *predicate, liftedLhs, finalRhs);
     replaceWithPackedMask(op, mask, rewriter);
     return success();
   }
@@ -2393,12 +4017,18 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
 /// (lowered onto the tile-scalar `pl.tile.cmps`), and
 /// `select(%cond, broadcast(%scalar), %tile)` becomes `pypto.select
 /// (%cond, %scalar, %tile)` (the composite `pl.tile.select` accepts a
-/// literal scalar branch and synthesizes its own scratch). A
-/// materialized broadcast tile cannot follow the loads' shape convention
-/// (leading 1s to the source rank plus 32B-aligned columns — the alignment
-/// is dtype-relative, so an f32 carrier drifts from a bf16-allocated load
-/// cast into f32), so the scalar forms sidestep tile-shape matching
-/// entirely.
+/// literal scalar branch and synthesizes its own scratch). Float
+/// division with the broadcast on its lhs becomes
+/// `pypto.mul(pypto.recip %tile, %scalar)` — division is the one binary
+/// whose materialized lhs would still fail `pl.div`'s same-valid-shape
+/// contract — and subtraction with the broadcast on its lhs becomes
+/// `pypto.add(pypto.neg %tile, %scalar)`, keeping the tile-first operand
+/// order the runtime's `pl.sub` demands. A materialized broadcast tile
+/// cannot follow the loads'
+/// shape convention (leading 1s to the source rank plus 32B-aligned
+/// columns — the alignment is dtype-relative, so an f32 carrier drifts
+/// from a bf16-allocated load cast into f32), so the scalar forms
+/// sidestep tile-shape matching entirely.
 ///
 /// Like the row-expand fusion, the pattern is keyed on the broadcast: the
 /// driver visits it before its consumers, and an unlegalized broadcast
@@ -2413,14 +4043,88 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
   /// Binary arith ops that map onto a pypto tile binary (mirroring the
   /// OpToPyptoOpPattern registrations).
   static bool isFusableArithBinary(Operation *op) {
-    return isa<arith::AddFOp, arith::SubFOp, arith::MulFOp, arith::DivFOp, arith::AddIOp, arith::SubIOp,
-               arith::MulIOp, arith::DivSIOp, arith::DivUIOp>(op);
+    return isa<arith::AddFOp, arith::SubFOp, arith::MulFOp, arith::DivFOp, arith::AddIOp, arith::SubIOp, arith::MulIOp,
+               arith::DivSIOp, arith::DivUIOp>(op);
   }
 
   /// Commutative binaries may take the broadcast on either side; the
   /// operands swap into the runtime's tile-first form.
   static bool isCommutativeArith(Operation *op) {
     return isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp>(op);
+  }
+
+  /// Float min/max clamp bounds fuse onto the runtime's tile-scalar
+  /// `maximums`/`minimums` forms (TMAXS/TMINS): the clamp is commutative,
+  /// so the broadcast may sit on either side.
+  static bool isFusableClampBinary(Operation *op) {
+    return isa<arith::MaximumFOp, arith::MinimumFOp>(op);
+  }
+
+  /// A non-finite clamp bound (-inf/+inf/nan) must stay on the `tile_full`
+  /// materialization: the runtime spells a tile-full constant with its hex
+  /// bit pattern (`0xFF800000`), which ptoas parses, while a scalar
+  /// `pl.const` prints the bare `-inf` literal, which ptoas rejects. Both
+  /// constant spellings are probed, mirroring `isLiteralScalar`.
+  static bool isNonFiniteScalarConstant(Value scalar) {
+    if (auto pyptoConst = scalar.getDefiningOp<pypto::ConstantOp>()) {
+      // floatToPythonText renders non-finite values as the lossless
+      // `pl._dump.float64('...')` spelling.
+      return pyptoConst.getValue().starts_with("pl._dump.");
+    }
+    auto arithConst = scalar.getDefiningOp<arith::ConstantOp>();
+    if (!arithConst) {
+      return false;
+    }
+    if (auto floatAttr = dyn_cast<FloatAttr>(arithConst.getValue())) {
+      return !floatAttr.getValue().isFinite();
+    }
+    return false;
+  }
+
+  /// Match gate for a binary arith user: the broadcast must sit on the
+  /// rhs of a tile operand, or on the lhs where the op still commutes
+  /// (the rewrite moves the scalar to the rhs) or where the rewrite can
+  /// spell it from the tile alone — float division through
+  /// `muls(recip(tile), scalar)`, subtraction through `adds(neg(tile),
+  /// scalar)`.
+  static bool isFusibleArithBinaryUser(Operation *user, Value bcast, bool isTileType(Type)) {
+    Value lhs = user->getOperand(0);
+    Value rhs = user->getOperand(1);
+    if (rhs == bcast) {
+      return isTileType(lhs.getType());
+    }
+    if (lhs == bcast && isCommutativeArith(user)) {
+      return isTileType(rhs.getType());
+    }
+    // Float division also fuses with the broadcast on its lhs: the
+    // rewrite spells `scalar / tile` as `muls(recip(tile), scalar)`.
+    if (lhs == bcast && isa<arith::DivFOp>(user)) {
+      return isTileType(rhs.getType());
+    }
+    // Subtraction likewise fuses with the broadcast on its lhs: the
+    // rewrite spells `scalar - tile` as `adds(neg(tile), scalar)`.
+    if (lhs == bcast && isa<arith::SubFOp, arith::SubIOp>(user)) {
+      return isTileType(rhs.getType());
+    }
+    return false;
+  }
+
+  /// Match gate for a clamp-style binary user: the broadcast must sit on
+  /// either side of a tile operand, and its scalar source must be finite —
+  /// non-finite bounds (softmax's -inf reduction seed) retreat to the
+  /// tile_full materialization — see isNonFiniteScalarConstant.
+  static bool isFusibleClampBinaryUser(Operation *user, Value bcast, bool isTileType(Type)) {
+    Value lhs = user->getOperand(0);
+    Value rhs = user->getOperand(1);
+    if (lhs != bcast && rhs != bcast) {
+      return false;
+    }
+    Value other = lhs == bcast ? rhs : lhs;
+    if (!isTileType(other.getType())) {
+      return false;
+    }
+    Value scalar = cast<npuvector::BroadcastOp>(bcast.getDefiningOp()).getSource();
+    return !isNonFiniteScalarConstant(scalar);
   }
 
   /// Match gate for one broadcast user: comparisons must take the
@@ -2445,14 +4149,10 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
       return isTileType(other.getType()) && isTileType(select.getCondition().getType());
     }
     if (isFusableArithBinary(user)) {
-      Value lhs = user->getOperand(0);
-      Value rhs = user->getOperand(1);
-      if (rhs == bcast) {
-        return isTileType(lhs.getType());
-      }
-      if (lhs == bcast && isCommutativeArith(user)) {
-        return isTileType(rhs.getType());
-      }
+      return isFusibleArithBinaryUser(user, bcast, isTileType);
+    }
+    if (isFusableClampBinary(user)) {
+      return isFusibleClampBinaryUser(user, bcast, isTileType);
     }
     return false;
   }
@@ -2477,6 +4177,75 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
       return !intAttr.getType().isInteger(1) && intToPythonText(intAttr.getValue());
     }
     return false;
+  }
+
+  /// Rewrites one matched consumer onto its scalar form in place: the
+  /// comparison keeps its tile lhs with the scalar rhs (packed through
+  /// the mask rewriter), binary arith swaps into the runtime's
+  /// tile-first form, clamps map onto the tile-scalar TMAXS/TMINS forms,
+  /// and selects take the scalar on the broadcast's branch.
+  static void rewriteFusedUser(Operation *user, Value scalar, Value bcast, ConversionPatternRewriter &rewriter) {
+    if (auto cmp = dyn_cast<npuvector::CmpIOp>(user)) {
+      auto code = cmpTypeCodeFor(cmp.getPredicate());
+      Value mask = rewriter.create<pypto::CmpOp>(cmp.getLoc(), cmp->getResult(0).getType(),
+                                                 static_cast<pypto::CmpPredicate>(*code), cmp.getLhs(), scalar);
+      replaceWithPackedMask(cmp, mask, rewriter);
+    } else if (auto cmp = dyn_cast<npuvector::CmpFOp>(user)) {
+      auto code = cmpTypeCodeFor(cmp.getPredicate());
+      Value mask = rewriter.create<pypto::CmpOp>(cmp.getLoc(), cmp->getResult(0).getType(),
+                                                 static_cast<pypto::CmpPredicate>(*code), cmp.getLhs(), scalar);
+      replaceWithPackedMask(cmp, mask, rewriter);
+    } else if (isFusableArithBinary(user)) {
+      // `tile OP scalar`: the broadcast sits on the rhs, or (commutative
+      // ops) on the lhs with the operands swapped into the runtime's
+      // tile-first form.
+      Value tile = user->getOperand(1) == bcast ? user->getOperand(0) : user->getOperand(1);
+      if (isa<arith::AddFOp, arith::AddIOp>(user)) {
+        rewriter.replaceOpWithNewOp<pypto::AddOp>(user, user->getResultTypes(), tile, scalar);
+      } else if (isa<arith::SubFOp, arith::SubIOp>(user)) {
+        if (user->getOperand(0) == bcast) {
+          // `scalar - tile`: the runtime's `pl.sub` is tile-first, so
+          // spell the difference as `adds(neg(tile), scalar)`. The
+          // negation preserves the tile's own shape and the
+          // tile-scalar add keeps it, so the pair needs no shape
+          // contract on the materialized broadcast.
+          Value neg = rewriter.create<pypto::NegOp>(user->getLoc(), user->getResultTypes(), tile);
+          rewriter.replaceOpWithNewOp<pypto::AddOp>(user, user->getResultTypes(), neg, scalar);
+        } else {
+          rewriter.replaceOpWithNewOp<pypto::SubOp>(user, user->getResultTypes(), tile, scalar);
+        }
+      } else if (isa<arith::MulFOp, arith::MulIOp>(user)) {
+        rewriter.replaceOpWithNewOp<pypto::MulOp>(user, user->getResultTypes(), tile, scalar);
+      } else if (isa<arith::DivFOp>(user) && user->getOperand(0) == bcast) {
+        // `scalar / tile`: `pl.div` demands src0/src1/dst share one
+        // valid shape, but a materialized broadcast carries the
+        // broadcast's static bound, never the tile's dynamic valid
+        // extent. `pl.recip` preserves the tile's own shape and the
+        // tile-scalar mul keeps it, so the pair spells the quotient
+        // without any shape contract.
+        Value recip = rewriter.create<pypto::RecipOp>(user->getLoc(), user->getResultTypes(), tile);
+        rewriter.replaceOpWithNewOp<pypto::MulOp>(user, user->getResultTypes(), recip, scalar);
+      } else {
+        rewriter.replaceOpWithNewOp<pypto::DivOp>(user, user->getResultTypes(), tile, scalar);
+      }
+    } else if (isFusableClampBinary(user)) {
+      // `min/max(tile, scalar)`: the runtime's TMAXS/TMINS take the
+      // scalar directly, so no `tile_full` carrier (and no Vec buffer
+      // allocation for it) is materialized. The clamp is commutative,
+      // so the broadcast may sit on either side.
+      Value tile = user->getOperand(1) == bcast ? user->getOperand(0) : user->getOperand(1);
+      if (isa<arith::MaximumFOp>(user)) {
+        rewriter.replaceOpWithNewOp<pypto::MaximumsOp>(user, user->getResultTypes(), tile, scalar);
+      } else {
+        rewriter.replaceOpWithNewOp<pypto::MinimumsOp>(user, user->getResultTypes(), tile, scalar);
+      }
+    } else {
+      auto select = cast<npuvector::SelectOp>(user);
+      bool trueIsBcast = select.getTrueValue() == bcast;
+      rewriter.replaceOpWithNewOp<pypto::SelectOp>(select, select->getResult(0).getType(), select.getCondition(),
+                                                   trueIsBcast ? scalar : select.getTrueValue(),
+                                                   trueIsBcast ? select.getFalseValue() : scalar);
+    }
   }
 
   LogicalResult matchAndRewrite(npuvector::BroadcastOp op, npuvector::BroadcastOp::Adaptor adaptor,
@@ -2512,37 +4281,7 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
     Value scalar = op.getSource();
     for (Operation *user : users) {
       rewriter.setInsertionPoint(user);
-      if (auto cmp = dyn_cast<npuvector::CmpIOp>(user)) {
-        auto code = cmpTypeCodeFor(cmp.getPredicate());
-        Value mask = rewriter.create<pypto::CmpOp>(cmp.getLoc(), cmp->getResult(0).getType(),
-                                                   static_cast<pypto::CmpPredicate>(*code), cmp.getLhs(), scalar);
-        replaceWithPackedMask(cmp, mask, rewriter);
-      } else if (auto cmp = dyn_cast<npuvector::CmpFOp>(user)) {
-        auto code = cmpTypeCodeFor(cmp.getPredicate());
-        Value mask = rewriter.create<pypto::CmpOp>(cmp.getLoc(), cmp->getResult(0).getType(),
-                                                   static_cast<pypto::CmpPredicate>(*code), cmp.getLhs(), scalar);
-        replaceWithPackedMask(cmp, mask, rewriter);
-      } else if (isFusableArithBinary(user)) {
-        // `tile OP scalar`: the broadcast sits on the rhs, or (commutative
-        // ops) on the lhs with the operands swapped into the runtime's
-        // tile-first form.
-        Value tile = user->getOperand(1) == op.getResult() ? user->getOperand(0) : user->getOperand(1);
-        if (isa<arith::AddFOp, arith::AddIOp>(user)) {
-          rewriter.replaceOpWithNewOp<pypto::AddOp>(user, user->getResultTypes(), tile, scalar);
-        } else if (isa<arith::SubFOp, arith::SubIOp>(user)) {
-          rewriter.replaceOpWithNewOp<pypto::SubOp>(user, user->getResultTypes(), tile, scalar);
-        } else if (isa<arith::MulFOp, arith::MulIOp>(user)) {
-          rewriter.replaceOpWithNewOp<pypto::MulOp>(user, user->getResultTypes(), tile, scalar);
-        } else {
-          rewriter.replaceOpWithNewOp<pypto::DivOp>(user, user->getResultTypes(), tile, scalar);
-        }
-      } else {
-        auto select = cast<npuvector::SelectOp>(user);
-        bool trueIsBcast = select.getTrueValue() == op.getResult();
-        rewriter.replaceOpWithNewOp<pypto::SelectOp>(select, select->getResult(0).getType(), select.getCondition(),
-                                                     trueIsBcast ? scalar : select.getTrueValue(),
-                                                     trueIsBcast ? select.getFalseValue() : scalar);
-      }
+      rewriteFusedUser(user, scalar, op.getResult(), rewriter);
     }
     rewriter.eraseOp(op);
     return success();
@@ -2591,6 +4330,59 @@ class TransposePattern : public OpConversionPattern<TransposeOp> {
   }
 };
 
+/// Materializes a select branch for `pypto.select`: tile branches pass
+/// through unchanged, while constant scalar branches become full tiles --
+/// that materialization needs a static shape, since a dynamic tile_full
+/// would have no extents to bind. Returns a null value when the branch is
+/// neither a tile nor a materializable constant.
+static Value materializeSelectBranch(Value branch, bool staticShape, Type convertedResult, Location loc,
+                                     ConversionPatternRewriter &rewriter) {
+  if (isa<ShapedType>(branch.getType())) {
+    return branch;
+  }
+  if (!staticShape) {
+    return Value();
+  }
+  auto constOp = branch.getDefiningOp<arith::ConstantOp>();
+  if (!constOp) {
+    return Value();
+  }
+  std::optional<std::string> text;
+  if (auto floatAttr = dyn_cast<FloatAttr>(constOp.getValue())) {
+    text = floatToPythonText(floatAttr.getValue());
+  } else if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+    if (!intAttr.getType().isInteger(1)) {
+      text = intToPythonText(intAttr.getValue());
+    }
+  }
+  if (!text) {
+    return Value();
+  }
+  return rewriter.create<pypto::TileFullOp>(loc, convertedResult, rewriter.getStringAttr(*text), ValueRange{})
+    .getResult();
+}
+
+/// Re-spells a constant select branch full with 32-byte-padded allocation
+/// rows: the full spells the padded allocation in its extents while its
+/// result type keeps naming the valid shape, the same split the
+/// sibling-bounds raise on `tile_full` uses; the reshape keeps that static
+/// type too -- the verifiers only check the element count against the
+/// full's own type and the select demands the branches match its result
+/// shape verbatim.
+static Value padSelectBranchFull(pypto::TileFullOp full, int64_t paddedCols, ArrayRef<int64_t> validShape,
+                                 Type convertedResult, Location loc, ConversionPatternRewriter &rewriter) {
+  SmallVector<Value> extents;
+  SmallVector<Value> validExtents;
+  for (unsigned axis = 0; axis < validShape.size(); ++axis) {
+    int64_t allocation = axis + 1 == validShape.size() ? paddedCols : validShape[axis];
+    extents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, allocation));
+    validExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, validShape[axis]));
+  }
+  auto paddedFull = rewriter.create<pypto::TileFullOp>(loc, convertedResult, full.getValue(), ValueRange(extents));
+  return rewriter.create<pypto::ReshapeOp>(loc, convertedResult, paddedFull, ValueRange(extents),
+                                           ValueRange(validExtents));
+}
+
 /// Rewrites a select into `pypto.select`: the runtime's composite
 /// `pl.tile.select` synthesizes the architecture-defined scratch tile, so
 /// no scratch is materialized here and dynamic result shapes are legal.
@@ -2633,41 +4425,40 @@ class SelectPattern : public OpConversionPattern<SelectOp> {
     Type convertedResult = op->getResult(0).getType();
     bool staticShape = resultType.hasStaticShape();
 
-    // Constant scalar branches become full tiles; that materialization
-    // needs a static shape, since a dynamic tile_full would have no
-    // extents to bind.
-    auto materializeBranch = [&](Value branch) -> Value {
-      if (isa<ShapedType>(branch.getType())) {
-        return branch;
-      }
-      if (!staticShape) {
-        return Value();
-      }
-      auto constOp = branch.getDefiningOp<arith::ConstantOp>();
-      if (!constOp) {
-        return Value();
-      }
-      std::optional<std::string> text;
-      if (auto floatAttr = dyn_cast<FloatAttr>(constOp.getValue())) {
-        text = floatToPythonText(floatAttr.getValue());
-      } else if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
-        if (!intAttr.getType().isInteger(1)) {
-          text = intToPythonText(intAttr.getValue());
-        }
-      }
-      if (!text) {
-        return Value();
-      }
-      return rewriter.create<pypto::TileFullOp>(loc, convertedResult, rewriter.getStringAttr(*text), ValueRange{})
-        .getResult();
-    };
-
-    Value trueBranch = materializeBranch(op.getTrueValue());
-    Value falseBranch = materializeBranch(op.getFalseValue());
+    Value trueBranch = materializeSelectBranch(op.getTrueValue(), staticShape, convertedResult, loc, rewriter);
+    Value falseBranch = materializeSelectBranch(op.getFalseValue(), staticShape, convertedResult, loc, rewriter);
     if (!trueBranch || !falseBranch) {
       return rewriter.notifyMatchFailure(op,
                                          "select branches must be tiles, or constant scalars on a "
                                          "statically shaped select");
+    }
+
+    // Both branches materialized as full tiles: the full's own dtype may
+    // already lay 32-byte-aligned rows that a downstream cast narrows
+    // below the alignment -- a cast clones the source tile's allocation
+    // (`DeduceTileCastType`), so an INT32 select over [2704] whose result
+    // feeds a FP16-then-INT8 chain makes the INT8 tile inherit 2704-byte
+    // rows, which `pto.alloc_tile` rejects. Pad the fulls' allocation to
+    // the narrowest downstream dtype and trim the valid region back to
+    // the source shape. Both branches take the same treatment so the
+    // frontend's shape/valid/dtype equality still holds, and the emitpy
+    // lowering turns the valid-carrying reshape into the reshape+slice
+    // sandwich the runtime accepts. A mixed branch (one tile value, one
+    // constant) keeps the unpadded form: its geometry must match the
+    // tile branch, which this pad cannot know.
+    auto trueFull = trueBranch.getDefiningOp<pypto::TileFullOp>();
+    auto falseFull = falseBranch.getDefiningOp<pypto::TileFullOp>();
+    if (trueFull && falseFull) {
+      int64_t cols = resultType.getShape().back();
+      auto minBytes = castChainMinElemBytes(op->getResult(0));
+      if (minBytes && cols > 0 && (cols * static_cast<int64_t>(*minBytes)) % 32 != 0) {
+        int64_t paddedCols = alignExtentTo32B(cols, *minBytes);
+        ArrayRef<int64_t> validShape = resultType.getShape();
+        trueBranch = padSelectBranchFull(trueFull, paddedCols, validShape, convertedResult, loc, rewriter);
+        falseBranch = padSelectBranchFull(falseFull, paddedCols, validShape, convertedResult, loc, rewriter);
+        rewriter.eraseOp(trueFull);
+        rewriter.eraseOp(falseFull);
+      }
     }
 
     // The select keeps the source result type so the conversion never
@@ -2699,7 +4490,8 @@ class CollapseShapePattern : public OpConversionPattern<memref::CollapseShapeOp>
     // abort the full conversion. The raw source operand is used on purpose:
     // signature rewriting happens by hand after the conversion, so the
     // memref stays as-is.
-    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getResult().getType(), op.getSrc());
+    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getResult().getType(), op.getSrc(), ValueRange(),
+                                                  ValueRange());
     return success();
   }
 };
@@ -2718,7 +4510,8 @@ class ExpandShapePattern : public OpConversionPattern<memref::ExpandShapeOp> {
     }
     // Same materialization constraints as the collapse handling: the
     // replacement keeps the original result type.
-    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getResult().getType(), op.getSrc());
+    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getResult().getType(), op.getSrc(), ValueRange(),
+                                                  ValueRange());
     return success();
   }
 };
@@ -2786,7 +4579,8 @@ class ReshapePattern : public OpConversionPattern<memref::ReshapeOp> {
     }
     // Same materialization constraints as the collapse handling: the
     // replacement keeps the original result type.
-    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getResult().getType(), op.getSource());
+    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getResult().getType(), op.getSource(), ValueRange(),
+                                                  ValueRange());
     return success();
   }
 };
@@ -3576,6 +5370,302 @@ static void undoSizeOneShapeFolds(func::FuncOp funcOp) {
   }
 }
 
+/// One streaming-reduction tail window matched for the
+/// insert-slice-into-reduction peephole: the reduction over the inserted
+/// window, the insert itself, the window combine, the tail operand, and
+/// the window extract.
+struct InsertSliceFoldCandidate {
+  npuvector::ReductionOp red;
+  npuvector::InsertSliceOp ins;
+  Operation *bin;
+  Value tail;
+  npuvector::ExtractSliceOp ext;
+};
+
+/// The fold splits the reduction across the insert window; add, max and
+/// min all obey the absorption law because the extracted window carries
+/// every scratch value the insert overwrites.
+static bool isAbsorbableReductionKind(vector::CombiningKind kind) {
+  return kind == vector::CombiningKind::ADD || kind == vector::CombiningKind::MAXIMUMF ||
+         kind == vector::CombiningKind::MINIMUMF || kind == vector::CombiningKind::MAXSI ||
+         kind == vector::CombiningKind::MAXUI || kind == vector::CombiningKind::MINSI ||
+         kind == vector::CombiningKind::MINUI;
+}
+
+/// Only full reductions qualify: the fold sums the whole scratch tile, so
+/// every source axis must be reduced.
+static bool isFullReduction(npuvector::ReductionOp red, ShapedType shaped) {
+  if (auto dims = red.getReductionDims(); dims && !dims->empty()) {
+    if (dims->size() != static_cast<size_t>(shaped.getRank())) {
+      return false;
+    }
+    llvm::SmallDenseSet<int64_t> covered;
+    for (int64_t d : *dims) {
+      if (d < 0 || d >= static_cast<int64_t>(shaped.getRank()) || !covered.insert(d).second) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/// The window combine must mirror the reduction kind: add pairs with
+/// addf/addi, max/maxui/maxsi with the matching arith spelling, and so
+/// does the min family.
+static bool binMatchesReductionKind(vector::CombiningKind kind, Operation *bin) {
+  return (kind == vector::CombiningKind::ADD && isa<arith::AddFOp, arith::AddIOp>(bin)) ||
+         (kind == vector::CombiningKind::MAXIMUMF && isa<arith::MaximumFOp>(bin)) ||
+         (kind == vector::CombiningKind::MINIMUMF && isa<arith::MinimumFOp>(bin)) ||
+         (kind == vector::CombiningKind::MAXSI && isa<arith::MaxSIOp>(bin)) ||
+         (kind == vector::CombiningKind::MAXUI && isa<arith::MaxUIOp>(bin)) ||
+         (kind == vector::CombiningKind::MINSI && isa<arith::MinSIOp>(bin)) ||
+         (kind == vector::CombiningKind::MINUI && isa<arith::MinUIOp>(bin));
+}
+
+static bool sameValueRanges(ValueRange a, ValueRange b) {
+  if (a.size() != b.size()) {
+    return false;
+  }
+  for (auto [x, y] : llvm::zip(a, b)) {
+    if (x != y) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// The bin combines the tail increment with the window extracted back
+/// out of the scratch tile: exactly one operand must be that extract,
+/// the other is the tail whose sum the fold splits out. Fails on two
+/// window extracts (ambiguous) or two plain operands.
+static bool disambiguateWindowOperands(Operation *bin, Value &tail, npuvector::ExtractSliceOp &ext) {
+  for (Value operand : bin->getOperands()) {
+    if (auto candidate = operand.getDefiningOp<npuvector::ExtractSliceOp>()) {
+      if (ext) {
+        return false;  // two window extracts: ambiguous
+      }
+      ext = candidate;
+    } else if (tail) {
+      return false;  // two non-extract operands
+    } else {
+      tail = operand;
+    }
+  }
+  return ext != nullptr;
+}
+
+/// The extract must read the same window the insert writes: the same dest
+/// buffer and identical offset/size/stride packs. A rank-reduced extract
+/// window changes the covered-position set; only full-rank windows (one
+/// keep_dim per source axis) keep the sum linear.
+static bool extractMatchesInsertWindow(npuvector::InsertSliceOp ins, npuvector::ExtractSliceOp ext) {
+  if (ext.getSource() != ins.getDest()) {
+    return false;
+  }
+  if (!sameValueRanges(ins.getOffsets(), ext.getOffsets()) || !sameValueRanges(ins.getSizes(), ext.getSizes()) ||
+      !sameValueRanges(ins.getStrides(), ext.getStrides())) {
+    return false;
+  }
+  return ext.getKeepDims().size() == ins.getOffsets().size();
+}
+
+/// Matches one reduction against the foldable streaming-tail shape:
+/// `reduction(insert_slice(bin(tail, extract_slice(scratch, win)),
+/// scratch, win))`. Returns nullopt when any leg of that shape is absent.
+static std::optional<InsertSliceFoldCandidate> matchInsertSliceFold(npuvector::ReductionOp red) {
+  vector::CombiningKind kind = red.getKind();
+  if (!isAbsorbableReductionKind(kind) || red.getAcc()) {
+    return std::nullopt;
+  }
+  auto shaped = dyn_cast<ShapedType>(red.getVector().getType());
+  if (!shaped || !isFullReduction(red, shaped)) {
+    return std::nullopt;
+  }
+  auto ins = red.getVector().getDefiningOp<npuvector::InsertSliceOp>();
+  if (!ins) {
+    return std::nullopt;
+  }
+  Operation *bin = ins.getSource().getDefiningOp();
+  if (!binMatchesReductionKind(kind, bin) || bin->getNumOperands() != 2) {
+    return std::nullopt;
+  }
+  InsertSliceFoldCandidate candidate;
+  if (!disambiguateWindowOperands(bin, candidate.tail, candidate.ext) ||
+      !extractMatchesInsertWindow(ins, candidate.ext)) {
+    return std::nullopt;
+  }
+  candidate.red = red;
+  candidate.ins = ins;
+  candidate.bin = bin;
+  return candidate;
+}
+
+/// Replaces one matched candidate: the reduction over the inserted window
+/// becomes the combine of the scratch and tail reductions, and the folded
+/// insert/extract/bin ops drop away when nothing else uses them.
+static void applyInsertSliceFold(InsertSliceFoldCandidate &item) {
+  OpBuilder builder(item.red);
+  Location loc = item.red.getLoc();
+  Type resultType = item.red->getResult(0).getType();
+  auto cloneOver = [&](Value vector) -> Value {
+    Operation *clone = builder.clone(*item.red);
+    clone->setOperand(0, vector);
+    return clone->getResult(0);
+  };
+  Value scratchSum = cloneOver(item.ins.getDest());
+  Value tailSum = cloneOver(item.tail);
+  Value sum;
+  if (isa<arith::AddFOp, arith::AddIOp>(item.bin)) {
+    // Add recombines with the source op itself: clone the bin, land the
+    // scalar result type, and drop the vectorizer's reduction markers so
+    // the scalar combine cannot be misattributed as a partial-reduction
+    // site.
+    Operation *sumOp = builder.clone(*item.bin);
+    sumOp->setOperands(ValueRange({scratchSum, tailSum}));
+    sumOp->getResult(0).setType(resultType);
+    sumOp->removeAttr("reduction_axes");
+    sumOp->removeAttr("reduction_type");
+    sum = sumOp->getResult(0);
+  } else {
+    // Max/min recombine through a comparison and select: the scalar PIL
+    // layer has no max/min callee, but gt/lt comparisons and the select
+    // conditional-expression lowering are both first-class (stage two
+    // maps them onto the `gt`/`lt` and `select` pseudo-callees, which
+    // the translator spells as infix comparisons and Python
+    // conditionals).
+    bool floatKind = isa<arith::MaximumFOp, arith::MinimumFOp>(item.bin);
+    Value cond;
+    if (floatKind) {
+      auto pred = isa<arith::MaximumFOp>(item.bin) ? arith::CmpFPredicate::OGT : arith::CmpFPredicate::OLT;
+      cond = builder.create<arith::CmpFOp>(loc, pred, scratchSum, tailSum);
+    } else {
+      auto pred = isa<arith::MaxSIOp>(item.bin)  ? arith::CmpIPredicate::sgt
+                  : isa<arith::MaxUIOp>(item.bin) ? arith::CmpIPredicate::ugt
+                  : isa<arith::MinSIOp>(item.bin) ? arith::CmpIPredicate::slt
+                                                  : arith::CmpIPredicate::ult;
+      cond = builder.create<arith::CmpIOp>(loc, pred, scratchSum, tailSum);
+    }
+    sum = builder.create<arith::SelectOp>(loc, cond, scratchSum, tailSum);
+  }
+  item.red->getResult(0).replaceAllUsesWith(sum);
+  item.red.erase();
+  if (item.ins->use_empty()) {
+    item.ins.erase();
+  }
+  if (item.bin->use_empty()) {
+    item.bin->erase();
+  }
+  if (item.ext->use_empty()) {
+    item.ext->erase();
+  }
+}
+
+/// Folds the streaming-reduction tail window the linalg vectorizer stamps
+/// over a scratch tile: `reduction(insert_slice(bin(tail, extract_slice(
+/// scratch, win)), scratch, win))` becomes `reduction(scratch) +
+/// reduction(tail)`. The sum is linear, so the window's read-modify-write
+/// is redundant when the only foldable shape is an add whose other operand
+/// is exactly the window extracted back out of the same scratch tile; the
+/// insert_slice itself then has no legal pypto lowering (the insert-slice
+/// pattern only feeds transfer_write/reshape users), which is what this
+/// peephole removes. Floating-point reassociation stays within the
+/// reduction_type="x" contract the vectorizer already stamps on the add.
+static void foldInsertSliceIntoReductions(func::FuncOp funcOp) {
+  SmallVector<InsertSliceFoldCandidate> work;
+  funcOp.walk([&](npuvector::ReductionOp red) {
+    if (auto candidate = matchInsertSliceFold(red)) {
+      work.push_back(*candidate);
+    }
+  });
+  for (InsertSliceFoldCandidate &item : work) {
+    applyInsertSliceFold(item);
+  }
+}
+
+/// Lifts a scalar-condition select onto the tile domain before the
+/// conversion: `select(cmpf(scalar, scalar), scalarBranch, tile)` cannot
+/// legalize -- `pl.tile.select` demands a packed predicate mask and a tile
+/// branch geometry -- so the comparison's lhs is broadcast onto the
+/// select's (static) result shape, turning the cmp into a tile comparison
+/// whose mask the select then consumes natively. The broadcast of a
+/// non-constant scalar materializes as a carrier tile; the constant rhs
+/// rides the tile-scalar `pl.tile.cmps` path, and a constant scalar branch
+/// is the literal form `pl.tile.select` already accepts.
+static void liftScalarCmpSelects(func::FuncOp funcOp) {
+  struct LiftCandidate {
+    npuvector::SelectOp select;
+    Operation *cmp;
+  };
+  SmallVector<LiftCandidate> work;
+  funcOp.walk([&](npuvector::SelectOp sel) {
+    if (!isa<IntegerType>(sel.getCondition().getType())) {
+      return;  // a tile condition needs no lift
+    }
+    Operation *cmp = sel.getCondition().getDefiningOp();
+    if (!isa<npuvector::CmpFOp, npuvector::CmpIOp>(cmp)) {
+      return;  // an opaque scalar condition has no tile spelling
+    }
+    if (llvm::any_of(cmp->getOperands(), [](Value operand) {
+          return isa<VectorType, npuvector::NPUVectorType>(operand.getType());
+        })) {
+      return;
+    }
+    auto shaped = dyn_cast<ShapedType>(sel->getResult(0).getType());
+    if (!shaped || !shaped.hasStaticShape() || shaped.getRank() == 0) {
+      return;
+    }
+    // `pl.tile.cmps` takes the rhs as a literal, and `pl.tile.select`
+    // materializes a scalar branch through tile.full -- both need compile
+    // time constants. The comparison's lhs rides a broadcast (carrier
+    // tile plus add), so any scalar value works there.
+    for (Value operand : cmp->getOperands()) {
+      if (operand == cmp->getOperand(0) || isa<VectorType, npuvector::NPUVectorType>(operand.getType())) {
+        continue;
+      }
+      if (!operand.getDefiningOp<arith::ConstantOp>()) {
+        return;
+      }
+    }
+    for (Value operand : sel->getOperands()) {
+      if (operand == sel.getCondition() || isa<VectorType, npuvector::NPUVectorType>(operand.getType())) {
+        continue;
+      }
+      if (!operand.getDefiningOp<arith::ConstantOp>()) {
+        return;
+      }
+    }
+    work.push_back({sel, cmp});
+  });
+  for (LiftCandidate &item : work) {
+    OpBuilder builder(item.select);
+    Location loc = item.select.getLoc();
+    auto shaped = cast<ShapedType>(item.select->getResult(0).getType());
+    SmallVector<Value> dims;
+    std::transform(shaped.getShape().begin(), shaped.getShape().end(), std::back_inserter(dims),
+                   [&](int64_t dim) { return builder.create<arith::ConstantIndexOp>(loc, dim); });
+    Value lifted = builder
+                       .create<npuvector::BroadcastOp>(loc, shaped, item.cmp->getOperand(0), ValueRange(dims),
+                                                       ValueRange(dims))
+                       .getResult();
+    Operation *liftedCmp = builder.clone(*item.cmp);
+    liftedCmp->setOperand(0, lifted);
+    // The source comparison spelled a scalar chain, so its result was the
+    // scalar i1. With the lhs riding the broadcast tile the mask must
+    // re-type onto the tile domain - a size-1 tile of i1 sharing the
+    // select's geometry - otherwise CmpToPypto forwards the scalar i1
+    // into pypto.cmp and the select's condition never becomes a tile.
+    Type maskType = npuvector::NPUVectorType::get(shaped.getShape(), builder.getI1Type());
+    liftedCmp->getResult(0).setType(maskType);
+    Operation *liftedSel = builder.clone(*item.select);
+    liftedSel->setOperand(0, liftedCmp->getResult(0));
+    item.select->getResult(0).replaceAllUsesWith(liftedSel->getResult(0));
+    item.select.erase();
+    if (item.cmp->use_empty()) {
+      item.cmp->erase();
+    }
+  }
+}
+
 /// Lowers the 0-D (scalar) chains onto plain scalars before the dialect
 /// conversion: the shape normalization folds size-1 tensors to 0-D tiles,
 /// which have no device form. A 0-D read becomes pypto.read of the single
@@ -3600,14 +5690,12 @@ static void lowerZeroDimChains(func::FuncOp funcOp) {
       // unfolded [1] buffer keeps its (possibly runtime) coordinate.
       Value source = op->getOperand(0);
       auto shaped = cast<ShapedType>(op->getResult(0).getType());
-      ValueRange indices = TypeSwitch<Operation *, ValueRange>(op)
-                             .Case<npuvector::TransferReadOp>(
-                               [](npuvector::TransferReadOp read) { return read.getIndices(); })
-                             .Case<vector::TransferReadOp>(
-                               [](vector::TransferReadOp read) { return read.getIndices(); });
+      ValueRange indices =
+        TypeSwitch<Operation *, ValueRange>(op)
+          .Case<npuvector::TransferReadOp>([](npuvector::TransferReadOp read) { return read.getIndices(); })
+          .Case<vector::TransferReadOp>([](vector::TransferReadOp read) { return read.getIndices(); });
       builder.setInsertionPoint(op);
-      Value read =
-        builder.create<pypto::ReadOp>(op->getLoc(), shaped.getElementType(), source, indices).getResult();
+      Value read = builder.create<pypto::ReadOp>(op->getLoc(), shaped.getElementType(), source, indices).getResult();
       op->getResult(0).replaceAllUsesWith(read);
       op->erase();
       continue;
@@ -3640,8 +5728,7 @@ static void lowerZeroDimChains(func::FuncOp funcOp) {
         bool scalarChainTail =
           op->getNumOperands() > 0 &&
           llvm::all_of(op->getOperands(), [](Value operand) { return !isa<ShapedType>(operand.getType()); }) &&
-          ((ns == "arith" || ns == "math") ||
-           isa<npuvector::CmpFOp, npuvector::CmpIOp, npuvector::SelectOp>(op));
+          ((ns == "arith" || ns == "math") || isa<npuvector::CmpFOp, npuvector::CmpIOp, npuvector::SelectOp>(op));
         if (!scalarChainTail) {
           continue;
         }
@@ -3963,6 +6050,13 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
 
     lowerZeroDimChains(funcOp);
 
+    // Pre-conversion peepholes over the npuvector IR: fold the
+    // streaming-reduction insert-slice windows onto sum linearity, and
+    // lift scalar-condition selects onto the tile domain, both before the
+    // type converter and target freeze the value types.
+    foldInsertSliceIntoReductions(funcOp);
+    liftScalarCmpSelects(funcOp);
+
     VectorToPyptoTypeConverter typeConverter(ctx);
     ConversionTarget target(*ctx);
     // The patterns emit typed pypto ops that keep the source result types;
@@ -3981,8 +6075,7 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
     target.addDynamicallyLegalOp<arith::ConstantOp>([](arith::ConstantOp op) { return isa<IndexType>(op.getType()); });
     target.addDynamicallyLegalOp<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp, arith::AddFOp,
                                  arith::SubFOp, arith::MulFOp, arith::DivFOp, arith::CmpIOp, arith::CmpFOp,
-                                 arith::SelectOp, arith::FloorDivSIOp, arith::RemSIOp, arith::RemUIOp,
-                                 arith::NegFOp>(
+                                 arith::SelectOp, arith::FloorDivSIOp, arith::RemSIOp, arith::RemUIOp, arith::NegFOp>(
       [](Operation *op) { return !isa<VectorType, npuvector::NPUVectorType>(op->getOperand(0).getType()); });
     // Scalar float math keeps the math op the same way: `pl.sqrt`/`pl.rsqrt`
     // are Tensor/Tile-only APIs, so scalar square roots (e.g. the batch-norm

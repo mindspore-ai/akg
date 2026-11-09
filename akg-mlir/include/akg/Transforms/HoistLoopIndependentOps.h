@@ -25,6 +25,7 @@
 namespace mlir {
 
 std::unique_ptr<OperationPass<func::FuncOp>> createHoistLoopIndependentOpsPass();
+std::unique_ptr<OperationPass<func::FuncOp>> createHoistLoopIndependentOpsPass(bool hoistForall);
 
 }  // namespace mlir
 

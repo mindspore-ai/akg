@@ -177,6 +177,7 @@ func.func @tile_unary_ops(%a : !pypto.tile<f32, [4, 8]>) {
   // CHECK: emitpy.call_opaque "pl.log"(%arg0)
   // CHECK: emitpy.call_opaque "pl.sqrt"(%arg0)
   // CHECK: emitpy.call_opaque "pl.rsqrt"(%arg0)
+  // CHECK: emitpy.call_opaque "pl.recip"(%arg0)
   // CHECK: emitpy.call_opaque "pl.sin"(%arg0)
   // CHECK: emitpy.call_opaque "pl.cos"(%arg0)
 
@@ -186,8 +187,9 @@ func.func @tile_unary_ops(%a : !pypto.tile<f32, [4, 8]>) {
   %3 = pypto.log %a : !pypto.tile<f32, [4, 8]> to !pypto.tile<f32, [4, 8]>
   %4 = pypto.sqrt %a : !pypto.tile<f32, [4, 8]> to !pypto.tile<f32, [4, 8]>
   %5 = pypto.rsqrt %a : !pypto.tile<f32, [4, 8]> to !pypto.tile<f32, [4, 8]>
-  %6 = pypto.sin %a : !pypto.tile<f32, [4, 8]> to !pypto.tile<f32, [4, 8]>
-  %7 = pypto.cos %a : !pypto.tile<f32, [4, 8]> to !pypto.tile<f32, [4, 8]>
+  %6 = pypto.recip %a : !pypto.tile<f32, [4, 8]> to !pypto.tile<f32, [4, 8]>
+  %7 = pypto.sin %a : !pypto.tile<f32, [4, 8]> to !pypto.tile<f32, [4, 8]>
+  %8 = pypto.cos %a : !pypto.tile<f32, [4, 8]> to !pypto.tile<f32, [4, 8]>
   return
 }
 

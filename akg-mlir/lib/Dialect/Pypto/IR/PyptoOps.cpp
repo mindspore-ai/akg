@@ -329,6 +329,25 @@ LogicalResult DivOp::verify() { return verifyBinaryShape(*this); }
 LogicalResult FmodOp::verify() { return verifyBinaryShape(*this); }
 LogicalResult MaximumOp::verify() { return verifyBinaryShape(*this); }
 LogicalResult MinimumOp::verify() { return verifyBinaryShape(*this); }
+
+// Shared verifier for the tile-scalar clamps: the lhs and result share one
+// tile shape while the rhs must stay a plain scalar (the runtime's TMAXS/
+// TMINS intrinsics take the scalar directly, so a tile rhs would miss the
+// point of the op family).
+template <typename OpTy>
+LogicalResult verifyTileScalarClampShape(OpTy op) {
+  if (failed(verifyBinaryShape(op))) {
+    return failure();
+  }
+  if (getShapeIfKnown(op.getRhs().getType())) {
+    return op->emitOpError("tile-scalar clamp needs a scalar rhs, got ")
+           << op.getRhs().getType();
+  }
+  return success();
+}
+
+LogicalResult MaximumsOp::verify() { return verifyTileScalarClampShape(*this); }
+LogicalResult MinimumsOp::verify() { return verifyTileScalarClampShape(*this); }
 LogicalResult AndOp::verify() { return verifyBinaryShape(*this); }
 LogicalResult OrOp::verify() { return verifyBinaryShape(*this); }
 LogicalResult XorOp::verify() { return verifyBinaryShape(*this); }
@@ -432,6 +451,7 @@ LogicalResult ExpOp::verify() { return verifyUnaryShape(*this); }
 LogicalResult LogOp::verify() { return verifyUnaryShape(*this); }
 LogicalResult SqrtOp::verify() { return verifyUnaryShape(*this); }
 LogicalResult RsqrtOp::verify() { return verifyUnaryShape(*this); }
+LogicalResult RecipOp::verify() { return verifyUnaryShape(*this); }
 LogicalResult SinOp::verify() { return verifyUnaryShape(*this); }
 LogicalResult CosOp::verify() { return verifyUnaryShape(*this); }
 

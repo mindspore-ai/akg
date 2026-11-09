@@ -160,6 +160,40 @@ func.func @test_scalar_broadcast_no_fusion(%arg0 : memref<1x8xf32>, %arg1 : memr
 
 // -----
 
+func.func @test_scalar_broadcast_div_fusion(%arg0 : memref<1x8xf32>, %arg1 : memref<1x8xf32>) {
+  // CHECK-LABEL: func.func @test_scalar_broadcast_div_fusion(
+  // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP32
+  // CHECK-SAME: attributes {emitpy.out_args = array<i64: 1>, emitpy.pypto_kernel
+  // A scalar broadcast on a division's lhs -- the weighting form
+  // `scalar / tile` -- fuses into `recip(tile) * scalar`: `pl.div` demands
+  // one shared shape across its operands, but the reciprocal preserves
+  // the tile's own shape and no carrier tile is materialized.
+  // CHECK-NOT: "pl.tile.full"
+  // CHECK: %[[C:.*]] = emitpy.call_opaque "pl.const"() {{.*}}"2.0"{{.*}}pl.FP32
+  // CHECK: %[[V0:.*]] = emitpy.call_opaque "pl.load"(%arg0)
+  // CHECK: %[[R:.*]] = emitpy.call_opaque "pl.recip"(%[[V0]])
+  // CHECK: emitpy.call_opaque "pl.mul"(%[[R]], %[[C]])
+  // CHECK: emitpy.call_opaque "pl.store"
+
+  // PYPTO-LABEL: func.func @test_scalar_broadcast_div_fusion(
+  // PYPTO: %[[CST:.*]] = pypto.constant "2.0" : f32
+  // PYPTO: %[[V0:.*]] = pypto.load %arg0[{{.*}}] : memref<1x8xf32> -> !npuvector<1x8xf32>
+  // PYPTO-NOT: pypto.tile_full
+  // PYPTO: %[[RECIP:.*]] = pypto.recip %[[V0]] : !npuvector<1x8xf32> to !npuvector<1x8xf32>
+  // PYPTO: pypto.mul %[[RECIP]], %[[CST]] : !npuvector<1x8xf32>, f32 to !npuvector<1x8xf32>
+  // PYPTO: pypto.store {{.*}}, %arg1[{{.*}}]
+
+  %c0 = arith.constant 0 : index
+  %cst = arith.constant 2.0 : f32
+  %v0 = npuvector.transfer_read %arg0[%c0, %c0], %cst : memref<1x8xf32>, !npuvector<1x8xf32>
+  %b = npuvector.broadcast %cst : f32 to !npuvector<1x8xf32>
+  %q = arith.divf %b, %v0 : !npuvector<1x8xf32>
+  npuvector.transfer_write %q, %arg1[%c0, %c0] : !npuvector<1x8xf32>, memref<1x8xf32>
+  return
+}
+
+// -----
+
 func.func @test_partial_reduction_and_casts(%arg0 : !npuvector<4x8xi32>) -> !npuvector<4xi32> {
   // CHECK-LABEL: func.func @test_partial_reduction_and_casts(
   // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.INT32
@@ -169,12 +203,15 @@ func.func @test_partial_reduction_and_casts(%arg0 : !npuvector<4x8xi32>) -> !npu
   // Partial reductions consume a scratch tile.
   // CHECK: %[[TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
   // CHECK: %[[R:.*]] = emitpy.call_opaque "pl.row_max"(%[[V0]], %[[TMP]])
-  // CHECK: %[[E:.*]] = emitpy.call_opaque "pl.cast"(%[[R]]) {{.*}}"pl.INT64"
+  // The reduction yields a rank-2 [4, 1] tile; the casts run in npuvector
+  // space, so the result first reshapes back to [4].
+  // CHECK: %[[RR:.*]] = emitpy.call_opaque "pl.reshape"(%[[R]])
+  // CHECK: %[[E:.*]] = emitpy.call_opaque "pl.cast"(%[[RR]]) {{.*}}"pl.INT64"
   // CHECK: %[[W:.*]] = emitpy.call_opaque "pl.cast"(%[[E]]) {{.*}}"pl.INT32"
   // The [4] output row is shorter than a 32-byte unit, so it is written
-  // element by element.
+  // element by element into the rank-2 view of the output.
   // CHECK: %[[E0:.*]] = emitpy.call_opaque "pl.read"(%[[W]])
-  // CHECK: emitpy.call_opaque "pl.write"(%arg1, %[[E0]])
+  // CHECK: emitpy.call_opaque "pl.write"({{.*}}, %[[E0]])
 
   // The partial reduction, the dtype casts, the scalar reads, the scratch
   // tile and the element-wise [4] store all ride in the pypto layer after
@@ -184,9 +221,10 @@ func.func @test_partial_reduction_and_casts(%arg0 : !npuvector<4x8xi32>) -> !npu
   // PYPTO: %[[R:.*]] = pypto.reduction max, row, %arg0, %[[TMP]] : !npuvector<4x8xi32>, {{.*}} -> !npuvector<4xi32>
   // PYPTO: %[[E:.*]] = pypto.cast %[[R]] : !npuvector<4xi32> to !npuvector<4xi64>
   // PYPTO: %[[W:.*]] = pypto.cast %[[E]] : !npuvector<4xi64> to !npuvector<4xi32>
-  // The short output row is written element by element.
+  // The short output row is written element by element into the rank-2
+  // [1, 4] view of the output.
   // PYPTO: %[[E0:.*]] = pypto.read %[[W]][%c0_0] : !npuvector<4xi32> -> i32
-  // PYPTO: pypto.write %arg1[{{.*}}], %[[E0]] : memref<4xi32>, i32
+  // PYPTO: pypto.write %{{.*}}[{{.*}}], %[[E0]] : memref<1x4xi32>, i32
 
   %r = npuvector.reduction <maxsi>, %arg0 {reduction_dims = array<i64: 1>} : !npuvector<4x8xi32> into !npuvector<4xi32>
   %e = npuvector.extsi %r : !npuvector<4xi32> to !npuvector<4xi64>
@@ -681,7 +719,10 @@ func.func @test_scalar_select(%arg0 : memref<1024x1024xf32>, %arg1 : memref<1024
 // A column-uniform row vector lifted to a rank-2 tile by
 // `npuvector.broadcast {dimension = [1]}` never materializes: the consumer
 // folds onto the runtime-native col_expand family. The addf takes the
-// broadcast on its lhs, exercising the commutative operand swap.
+// broadcast on its lhs, exercising the commutative operand swap. The lift's
+// reshape spells the source's allocated extent as constant extents on a
+// dynamic `1x?` IR type, which exempts it from the expand's strict
+// row/column count check.
 
 func.func @test_col_broadcast_fusion_static(%arg0 : memref<8x32xf32>, %arg1 : memref<32xf32>, %arg2 : memref<8x32xf32>) {
   // CHECK-LABEL: func.func @test_col_broadcast_fusion_static(
@@ -694,8 +735,8 @@ func.func @test_col_broadcast_fusion_static(%arg0 : memref<8x32xf32>, %arg1 : me
   // PYPTO-LABEL: func.func @test_col_broadcast_fusion_static(
   // PYPTO: %[[TILE:.*]] = pypto.load %arg0[{{.*}}] : memref<8x32xf32> -> !npuvector<8x32xf32>
   // PYPTO: %[[ROW:.*]] = pypto.load %arg1[{{.*}}] : memref<32xf32> -> !npuvector<32xf32>
-  // PYPTO: %[[VEC:.*]] = pypto.reshape %[[ROW]] : !npuvector<32xf32> to !npuvector<1x32xf32>
-  // PYPTO: %[[SUM:.*]] = pypto.col_expand_add %[[TILE]], %[[VEC]] : !npuvector<8x32xf32>, !npuvector<1x32xf32> to !npuvector<8x32xf32>
+  // PYPTO: %[[VEC:.*]] = pypto.reshape %[[ROW]] extents[%c1, %c32] : !npuvector<32xf32> to !npuvector<1x?xf32>
+  // PYPTO: %[[SUM:.*]] = pypto.col_expand_add %[[TILE]], %[[VEC]] : !npuvector<8x32xf32>, !npuvector<1x?xf32> to !npuvector<8x32xf32>
   // PYPTO: pypto.store %[[SUM]], %arg2[{{.*}}] : !npuvector<8x32xf32>, memref<8x32xf32>
 
   %c0 = arith.constant 0 : index
@@ -721,8 +762,8 @@ func.func @test_col_broadcast_fusion_dynamic(%arg0 : memref<8x32xf32>, %arg1 : m
   // CHECK: emitpy.call_opaque "pl.store"(%[[SUM]], %arg2)
 
   // PYPTO-LABEL: func.func @test_col_broadcast_fusion_dynamic(
-  // PYPTO: %[[VEC:.*]] = pypto.reshape {{.*}} : !npuvector<32xf32> to !npuvector<1x32xf32>
-  // PYPTO: %[[SUM:.*]] = pypto.col_expand_sub {{.*}}, %[[VEC]] : !npuvector<?x32xf32>, !npuvector<1x32xf32> to !npuvector<?x32xf32>
+  // PYPTO: %[[VEC:.*]] = pypto.reshape {{.*}} extents[%c1, %c32_0] : !npuvector<32xf32> to !npuvector<1x?xf32>
+  // PYPTO: %[[SUM:.*]] = pypto.col_expand_sub {{.*}}, %[[VEC]] : !npuvector<?x32xf32>, !npuvector<1x?xf32> to !npuvector<?x32xf32>
   // PYPTO: pypto.store %[[SUM]], %arg2[{{.*}}] : !npuvector<?x32xf32>, memref<8x32xf32>
 
   %c0 = arith.constant 0 : index

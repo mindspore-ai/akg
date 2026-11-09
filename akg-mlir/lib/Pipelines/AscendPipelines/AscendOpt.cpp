@@ -246,7 +246,9 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     fusionPM.addPass(createCanonicalizerPass());
     fusionPM.addPass(affine::createAffineReductionAnnotationPass());
     fusionPM.addPass(createLoopSliceSplitPass());
-    fusionPM.addPass(createHoistLoopIndependentOpsPass());
+    // No forall hoisting on the emitpy path: lifted values would escape the
+    // pypto.spmd scope the conversion builds around scf.forall.
+    fusionPM.addPass(createHoistLoopIndependentOpsPass(!options.enableEmitPypto));
     fusionPM.addPass(createAKGLoopFusionPass());
     fusionPM.addPass(createStoreLoadElimPass());
     fusionPM.addPass(affine::createAffineLoopInvariantCodeMotionPass());
@@ -255,7 +257,11 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     fusionPM.addPass(createReductionSiblingRecomputePass());
     fusionPM.addPass(createAffineIteratorConversionPass());
     fusionPM.addPass(createStoreLoadElimPass());
-    fusionPM.addPass(createLegalizeTypeForAscendPass(options.optLevel >= kLegalizeTypeOptLevel));
+    // The pypto backend lowers tile integer comparisons natively, so the
+    // legacy i32/i64 cmpi guard in the type legalization must stand down
+    // when emitpypto is on.
+    fusionPM.addPass(
+        createLegalizeTypeForAscendPass(options.optLevel >= kLegalizeTypeOptLevel, options.enableEmitPypto));
     // The pypto backend keeps math.rsqrt (first-class pypto.rsqrt); the
     // 1/sqrt expansion only serves the HIVM lowering.
     fusionPM.addPass(createNormalizePass(!options.enableEmitPypto));
@@ -274,7 +280,8 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     pm.addPass(scf::createNPUVectorVectorizePass());
     pm.addPass(npuvector::createElimScfIterArgsPass());
     pm.addPass(createCanonicalizerPass());
-    pm.addPass(createHoistLoopIndependentOpsPass());
+    // Same emitpy restriction as the fusion instance above.
+    pm.addPass(createHoistLoopIndependentOpsPass(!options.enableEmitPypto));
     pm.addPass(npuvector::createRefineNPUVectorStaticShapePass());
     pm.addPass(npuvector::createEliminateNPUVectorRedundantOpsPass());
     pm.addPass(createCSEPass());
