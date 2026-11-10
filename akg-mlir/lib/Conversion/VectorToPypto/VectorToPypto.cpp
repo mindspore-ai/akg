@@ -155,6 +155,11 @@ static SmallVector<Type> pyptoResultTypes(Operation *source, ValueRange operands
 
 /// Renders a floating-point value as Python source text.
 static std::string floatToPythonText(APFloat value) {
+  // PTOAS cannot parse scalar infinity literals. Use the finite FP32
+  // extremum for reduction sentinels on this backend.
+  if (value.isInfinity()) {
+    return value.isNegative() ? "(-1.0 * 3.4028234663852886e38)" : "3.4028234663852886e38";
+  }
   if (value.isInfinity() || value.isNaN()) {
     // Non-finite values have no Python numeric literal, and the PIL parser
     // rejects a float('inf') call ("Unsupported function call") wherever it
@@ -2023,8 +2028,8 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
 ///   values are stored through a `[1, N]` reshape when the row is a whole
 ///   number of 32-byte units, and element-wise through `pl.write`
 ///   otherwise;
-/// - a value that is just a broadcast scalar is written directly with
-///   `pl.write(dest, [o...], scalar)` instead of materializing a tile.
+/// - a single-element scalar broadcast may use `pl.write`; larger
+///   broadcasts must materialize and store the entire tile.
 template <typename TransferWriteOp>
 class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
  public:
@@ -2037,11 +2042,10 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     }
     Location loc = op.getLoc();
 
-    // A broadcast scalar feeding only this write is written directly; the
-    // broadcast (or its converted add-onto-carrier form) is left dead for
-    // the post-conversion cleanup to drop.
+    // Only a one-element broadcast can be replaced by a scalar store.
+    // Larger broadcasts initialize every element, including scratch buffers.
     Value vector = op.getVector();
-    if (Value scalar = scalarBroadcastSource(vector)) {
+    if (Value scalar = singleElementBroadcastSource(vector)) {
       writeScalar(rewriter, loc, op.getSource(), op.getIndices(), scalar);
       finishRewrite(rewriter, op);
       return success();
@@ -2109,6 +2113,14 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
   }
 
  private:
+  static Value singleElementBroadcastSource(Value vector) {
+    auto shaped = dyn_cast<ShapedType>(vector.getType());
+    if (!shaped || !shaped.hasStaticShape() || shaped.getNumElements() != 1) {
+      return Value();
+    }
+    return scalarBroadcastSource(vector);
+  }
+
   /// True when `vector` is a plain scalar value stored into a statically
   /// shaped single-element tensor.
   static bool isScalarToSingleElementDest(Value vector, ShapedType destType) {
@@ -2905,6 +2917,8 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
     if (shaped.getRank() == 1 && shaped.getNumElements() > 1 && shaped.getNumElements() % alignRows == 0 &&
         (shaped.getNumElements() / alignRows) * elemBytes % 32 == 0) {
       acc = reduceRankOneViaReshape(rewriter, loc, kind, shaped, resultType, input, alignRows);
+    } else if (needsPaddedFullReduction(shaped, kind)) {
+      acc = reducePaddedRankOne(rewriter, loc, kind, shaped, resultType, input, alignRows);
     } else if (shaped.getRank() == 2 && cols > 1 && rows * elemBytes % 32 == 0 && cols * elemBytes % 32 == 0) {
       acc = reduceViaDeviceRowReduce(rewriter, loc, kind, shaped, resultType, input, rows);
     } else {
@@ -2912,6 +2926,37 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
     }
     rewriter.replaceOp(op, acc);
     return success();
+  }
+
+  static bool needsPaddedFullReduction(ShapedType shaped, pypto::ReduceKind kind) {
+    return shaped.getRank() == 1 && shaped.getNumElements() > 256 && shaped.getElementType().isF32() &&
+           (kind == pypto::ReduceKind::sum || kind == pypto::ReduceKind::min || kind == pypto::ReduceKind::max);
+  }
+
+  static Value reducePaddedRankOne(ConversionPatternRewriter &rewriter, Location loc, pypto::ReduceKind kind,
+                                  ShapedType shaped, Type resultType, Value input, unsigned alignRows) {
+    Type elemType = shaped.getElementType();
+    unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
+    // The 2D reduction needs both axes aligned. Materialize neutral padding
+    // before reshaping instead of expanding thousands of scalar reads/ops.
+    // TFILLPAD_EXPAND copies only the source valid region, so uninitialized
+    // physical padding from a cast/load never enters the reduction.
+    int64_t valid = shaped.getNumElements();
+    int64_t physical = alignExtentTo32B(valid, elemBytes);
+    if (auto allocation = tileAllocationShape(input); allocation && allocation->size() == 1 &&
+        !ShapedType::isDynamic((*allocation)[0])) {
+      physical = std::max(physical, (*allocation)[0]);
+    }
+    int64_t quantum = alignRows * alignRows;
+    int64_t padded = llvm::divideCeil(physical, quantum) * quantum;
+    Value source = physical == valid ? reshapeTileOp(rewriter, loc, input, 1, physical, elemType)
+        : reshapeTileWithValidOp(rewriter, loc, input, 1, physical, 1, valid, elemType);
+    StringRef pad = kind == pypto::ReduceKind::sum ? "zero" :
+                    kind == pypto::ReduceKind::max ? "min" : "max";
+    Type paddedType = pypto::TileType::get(rewriter.getContext(), elemType, {1, padded});
+    Value expanded = rewriter.create<pypto::FillPadExpandOp>(loc, paddedType, source, rewriter.getStringAttr(pad));
+    return reduceRankOneViaReshape(rewriter, loc, kind, VectorType::get({padded}, elemType),
+                                 resultType, expanded, alignRows);
   }
 
   /// Rank-1 lowering: view the tile as [alignRows, N/alignRows] so the
@@ -5506,9 +5551,110 @@ static void collectWriteDestArgs(func::FuncOp funcOp, Block &entry, DenseSet<uns
   }
 }
 
+/// Classify buffers whose users can be represented by tensor parameters.
+static bool classifyPromotedAlloc(Value result, bool &hasRead) {
+  hasRead = false;
+  for (OpOperand &use : result.getUses()) {
+    Operation *owner = use.getOwner();
+    if (isStoreInto(use)) {
+      continue;
+    }
+    if (isa<func::ReturnOp, memref::DeallocOp>(owner)) {
+      continue;
+    }
+    if (isa<vector::TransferReadOp, npuvector::TransferReadOp>(owner)) {
+      hasRead = true;
+      continue;
+    }
+    // A view chain that is only written keeps the buffer write-only;
+    // any other view chain reads back through it.
+    if (auto view = dyn_cast<ViewLikeOpInterface>(owner)) {
+      if (use.get() == view.getViewSource()) {
+        if (viewChainOnlyWritten(view.getOperation()->getResult(0))) {
+          continue;
+        }
+        hasRead = true;
+        continue;
+      }
+    }
+    if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(owner)) {
+      if (use.get() == castOp.getSource()) {
+        if (viewChainOnlyWritten(castOp.getOperation()->getResult(0))) {
+          continue;
+        }
+        hasRead = true;
+        continue;
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
+static LogicalResult getPrivateWorkspaceGrid(Operation *allocOp, Value result, MemRefType bufferType,
+                                              Value &blockIndex, std::optional<int64_t> &blockCount) {
+  if (auto grid = allocOp->getParentOfType<scf::ForallOp>()) {
+    if (grid.getInductionVars().size() == 1 &&
+        staticIntValue(grid.getMixedLowerBound()[0]) == 0 &&
+        staticIntValue(grid.getMixedStep()[0]) == 1) {
+      blockIndex = grid.getInductionVars()[0];
+      blockCount = staticIntValue(grid.getMixedUpperBound()[0]);
+    }
+  } else if (auto grid = allocOp->getParentOfType<scf::ParallelOp>()) {
+    if (grid.getNumLoops() == 1 && constIndexValue(grid.getLowerBound()[0]) == 0 &&
+        constIndexValue(grid.getStep()[0]) == 1) {
+      blockIndex = grid.getInductionVars()[0];
+      blockCount = constIndexValue(grid.getUpperBound()[0]);
+    }
+  }
+  bool inParallel = allocOp->getParentOfType<scf::ForallOp>() ||
+                    allocOp->getParentOfType<scf::ParallelOp>();
+  if (inParallel) {
+    if (!blockIndex || !blockCount || !bufferType.hasStaticShape() || bufferType.getRank() == 0 ||
+        !bufferType.getLayout().isIdentity()) {
+      return allocOp->emitOpError("private workspaces require a static contiguous buffer and a one-dimensional grid");
+    }
+    for (Operation *user : result.getUsers()) {
+      if (!isa<vector::TransferReadOp, npuvector::TransferReadOp, vector::TransferWriteOp,
+               npuvector::TransferWriteOp, memref::DeallocOp>(user)) {
+        return allocOp->emitOpError("private workspace views are not supported");
+      }
+    }
+  }
+  return success();
+}
+
+template <typename TransferOp>
+static void offsetWorkspaceTransfer(TransferOp transfer, Value offset, bool addLeadingDimension) {
+  OpBuilder at(transfer);
+  SmallVector<Value> indices(transfer.getIndices());
+  indices[0] = at.create<arith::AddIOp>(transfer.getLoc(), offset, indices[0]);
+  if (addLeadingDimension) {
+    indices.insert(indices.begin(), at.create<arith::ConstantIndexOp>(transfer.getLoc(), 0));
+    if (auto map = transfer->template getAttrOfType<AffineMapAttr>("permutation_map")) {
+      transfer->setAttr("permutation_map", AffineMapAttr::get(map.getValue().shiftDims(1)));
+    }
+  }
+  transfer.getIndicesMutable().assign(indices);
+}
+
+static void offsetWorkspaceUsers(Value result, Value offset, bool addLeadingDimension) {
+  for (Operation *user : llvm::to_vector(result.getUsers())) {
+    if (auto read = dyn_cast<vector::TransferReadOp>(user)) {
+      offsetWorkspaceTransfer(read, offset, addLeadingDimension);
+    } else if (auto read = dyn_cast<npuvector::TransferReadOp>(user)) {
+      offsetWorkspaceTransfer(read, offset, addLeadingDimension);
+    } else if (auto write = dyn_cast<vector::TransferWriteOp>(user)) {
+      offsetWorkspaceTransfer(write, offset, addLeadingDimension);
+    } else if (auto write = dyn_cast<npuvector::TransferWriteOp>(user)) {
+      offsetWorkspaceTransfer(write, offset, addLeadingDimension);
+    }
+  }
+}
+
 /// Appends output parameters for allocations that only feed stores/returns
 /// (step 2): read-back allocations become InOut instead.
-static void promoteAllocsToOutputs(func::FuncOp funcOp, Block &entry, DenseSet<unsigned> &outArgs,
+static LogicalResult promoteAllocsToOutputs(func::FuncOp funcOp, Block &entry, DenseSet<unsigned> &outArgs,
                                    DenseSet<unsigned> &inOutArgs) {
   SmallVector<Operation *> allocs;
   funcOp.walk([&](Operation *op) {
@@ -5518,48 +5664,49 @@ static void promoteAllocsToOutputs(func::FuncOp funcOp, Block &entry, DenseSet<u
   });
   for (Operation *allocOp : allocs) {
     Value result = allocOp->getResult(0);
-    bool ioOnly = true;
     bool hasRead = false;
-    for (OpOperand &use : result.getUses()) {
-      Operation *owner = use.getOwner();
-      if (isStoreInto(use)) {
-        continue;
-      }
-      if (isa<func::ReturnOp, memref::DeallocOp>(owner)) {
-        continue;
-      }
-      if (isa<vector::TransferReadOp, npuvector::TransferReadOp>(owner)) {
-        hasRead = true;
-        continue;
-      }
-      // A view chain that is only written keeps the buffer write-only;
-      // any other view chain reads back through it.
-      if (auto view = dyn_cast<ViewLikeOpInterface>(owner)) {
-        if (use.get() == view.getViewSource()) {
-          if (viewChainOnlyWritten(view.getOperation()->getResult(0))) {
-            continue;
-          }
-          hasRead = true;
-          continue;
-        }
-      }
-      if (auto castOp = dyn_cast<memref::MemorySpaceCastOp>(owner)) {
-        if (use.get() == castOp.getSource()) {
-          if (viewChainOnlyWritten(castOp.getOperation()->getResult(0))) {
-            continue;
-          }
-          hasRead = true;
-          continue;
-        }
-      }
-      ioOnly = false;
-      break;
-    }
-    if (!ioOnly) {
+    if (!classifyPromotedAlloc(result, hasRead)) {
       continue;  // leaves the op for the conversion to reject
     }
 
-    BlockArgument newArg = entry.addArgument(cast<MemRefType>(result.getType()), allocOp->getLoc());
+    auto bufferType = cast<MemRefType>(result.getType());
+    Value blockIndex;
+    std::optional<int64_t> blockCount;
+    if (failed(getPrivateWorkspaceGrid(allocOp, result, bufferType, blockIndex, blockCount))) {
+      return failure();
+    }
+    // An allocation inside a parallel region is private to each instance.
+    // Preserve that ownership when exposing its backing storage in the ABI.
+    // Pad each region to a cache line so scalar stores cannot share a line.
+    if (blockIndex && blockCount && bufferType.hasStaticShape() && bufferType.getRank() > 0) {
+      OpBuilder builder(allocOp);
+      SmallVector<int64_t> shape(bufferType.getShape());
+      auto trailingShape = ArrayRef<int64_t>(shape).drop_front();
+      int64_t rowBytes = std::accumulate(trailingShape.begin(), trailingShape.end(),
+                                         int64_t(bufferType.getElementTypeBitWidth() / 8), std::multiplies<int64_t>());
+      int64_t alignment = 64 / std::gcd(int64_t(64), rowBytes);
+      int64_t stride = llvm::divideCeil(shape[0], alignment) * alignment;
+      shape[0] = stride * *blockCount;
+      // Loads and stores must capture the very same GM tensor parameter.
+      // A flat load plus a reshaped store becomes two opaque kernel pointers;
+      // PTOAS cannot infer their alias and can omit the store-to-load fence.
+      // Give rank-one workspaces their canonical 2D backing shape up front.
+      bool addLeadingDimension = shape.size() == 1;
+      if (addLeadingDimension) shape.insert(shape.begin(), 1);
+      auto backingType = MemRefType::get(shape, bufferType.getElementType());
+      BlockArgument backing = entry.addArgument(backingType, allocOp->getLoc());
+      inOutArgs.insert(backing.getArgNumber());
+      Value offset = builder.create<arith::MulIOp>(allocOp->getLoc(), blockIndex,
+          builder.create<arith::ConstantIndexOp>(allocOp->getLoc(), stride));
+      // Address the backing tensor directly. A tensor slice inside an
+      // incore scope is converted to a tile by PyPTO, so it cannot remain
+      // the destination of a store. Carry the private base in IO indices.
+      offsetWorkspaceUsers(result, offset, addLeadingDimension);
+      result.replaceAllUsesWith(backing);
+      allocOp->erase();
+      continue;
+    }
+    BlockArgument newArg = entry.addArgument(bufferType, allocOp->getLoc());
     if (hasRead) {
       inOutArgs.insert(newArg.getArgNumber());
     } else {
@@ -5568,6 +5715,7 @@ static void promoteAllocsToOutputs(func::FuncOp funcOp, Block &entry, DenseSet<u
     result.replaceAllUsesWith(newArg);
     allocOp->erase();
   }
+  return success();
 }
 
 /// Appends an output tensor for a computed tile return value and stores
@@ -5681,7 +5829,7 @@ static LogicalResult rewriteFunctionOutputs(func::FuncOp funcOp) {
   collectWriteDestArgs(funcOp, entry, outArgs, inOutArgs);
 
   // 2. Allocations that only feed stores/returns become output arguments.
-  promoteAllocsToOutputs(funcOp, entry, outArgs, inOutArgs);
+  if (failed(promoteAllocsToOutputs(funcOp, entry, outArgs, inOutArgs))) return failure();
 
   // 3. Rewrite returns: computed values are stored into appended output
   // parameters and the return itself is emptied.

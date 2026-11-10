@@ -102,6 +102,14 @@ def Pypto_TileFullOp : Pypto_Op<"tile_full"> {
   let hasVerifier = 1;
 }
 
+def Pypto_FillPadExpandOp : Pypto_Op<"fillpad_expand"> {
+  let summary = "Copy the valid tile region into a larger tile with neutral padding";
+  let arguments = (ins AnyType:$source, StrAttr:$padValue);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$source `pad` $padValue attr-dict `:` type($source) `to` type($result)";
+  let hasVerifier = 1;
+}
+
 def Pypto_CreateTileOp : Pypto_Op<"create_tile"> {
   let summary = "Allocate an uninitialized scratch tile";
   let description =
