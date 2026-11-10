@@ -115,7 +115,7 @@ def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_
         num_outputs=len(output_indexes))
     artifact = CompiledArtifact.from_dir(compiled.path)
     parameters = artifact.metadata.parameters
-    if len(parameters) != len(buffers):
+    if len(parameters) < len(buffers):
         raise ValueError(f"{kernel_name}: compiled parameters={len(parameters)}, "
                          f"benchmark buffers={len(buffers)}")
     device_id = getattr(options, "device_id", None)
@@ -123,7 +123,17 @@ def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_
         device_id = int(os.environ.get("DEVICE_ID", "0"))
     torch.npu.set_device(device_id)
     arguments = []
-    for parameter, buffer in zip(parameters, buffers):
+    for index, parameter in enumerate(parameters):
+        if index >= len(buffers):
+            # Lowering appends private reduction workspaces to the ABI. These
+            # are not graph inputs or results and need their physical size.
+            dtype = _to_torch_dtype(parameter.dtype)
+            if parameter.shape is None or dtype is None:
+                raise ValueError(f"invalid workspace parameter: {parameter}")
+            arguments.append(torch.empty(tuple(parameter.shape), dtype=dtype,
+                                         device=f"npu:{device_id}"))
+            continue
+        buffer = buffers[index]
         if parameter.shape is None:
             arguments.append(np.asarray(buffer).item())
             continue
@@ -141,7 +151,9 @@ def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_
     compiled.launcher(*arguments, stream=stream.npu_stream)
     stream.synchronize()
     for index in output_indexes:
-        result = arguments[index].detach().cpu()
+        # Output indices refer to graph buffers, before appended workspaces.
+        argument_index = index if index >= 0 else len(buffers) + index
+        result = arguments[argument_index].detach().cpu()
         if result.dtype == torch.bfloat16:
             result = result.float()
         buffers[index] = result.numpy().reshape(np.asarray(buffers[index]).shape)

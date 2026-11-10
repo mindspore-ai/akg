@@ -800,6 +800,28 @@ class RangeOpPattern : public OpConversionPattern<pypto::RangeOp> {
 // Constant and allocation producers
 //===----------------------------------------------------------------------===//
 
+/// Materializes expanded, initialized padding through the native tile operation.
+class FillPadExpandOpPattern : public OpConversionPattern<pypto::FillPadExpandOp> {
+ public:
+  using OpConversionPattern<pypto::FillPadExpandOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(pypto::FillPadExpandOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto tile = dyn_cast<pypto::TileType>(op.getResult().getType());
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!tile || !resultType) return rewriter.notifyMatchFailure(op, "expected a static PyPTO tile");
+    SmallVector<Attribute> args{
+      rewriter.getIndexAttr(0),
+      rewriter.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(tile.getShape())),
+      rewriter.getAttr<emitpy::OpaqueAttr>("pl.PadValue." + op.getPadValue().str())};
+    SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""),
+                                    rewriter.getStringAttr("pad_value")};
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.tile.fillpad_expand",
+        ValueRange{adaptor.getSource()}, rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    return success();
+  }
+};
+
 /// Rewrites `pypto.constant` into `pl.const(value, dtype)`: the value is
 /// the Python literal text; the dtype keeps scalars from defaulting to
 /// Python int/float64 semantics.
@@ -1763,10 +1785,10 @@ struct ConvertPyptoToEmitPyPass : impl::ConvertPyptoToEmitPyBase<ConvertPyptoToE
     RewritePatternSet patterns(&getContext());
     populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, typeConverter);
     populateReturnOpTypeConversionPattern(patterns, typeConverter);
-    patterns.add<ConstantOpPattern, TileFullOpPattern, CreateTileOpPattern, SliceOpPattern, ReshapeOpPattern,
-                 TransposeOpPattern, ReinterpretViewOpPattern, CastOpPattern, CmpOpPattern, ReductionOpPattern,
-                 ReadOpPattern, WriteOpPattern, LoadOpPattern, StoreOpPattern, MatmulOpPattern>(typeConverter,
-                                                                                                patterns.getContext());
+    patterns.add<ConstantOpPattern, TileFullOpPattern, FillPadExpandOpPattern, CreateTileOpPattern, SliceOpPattern,
+                 ReshapeOpPattern, TransposeOpPattern, ReinterpretViewOpPattern, CastOpPattern, CmpOpPattern,
+                 ReductionOpPattern, ReadOpPattern, WriteOpPattern, LoadOpPattern, StoreOpPattern, MatmulOpPattern>(
+      typeConverter, patterns.getContext());
     patterns.add<IndexConstantOpPattern, SpmdOpPattern, RangeOpPattern>(typeConverter, patterns.getContext());
     // Scalar comparisons kept by stage one lower onto the eq/ne/lt/le/gt/ge
     // pseudo-callees (`pl.cmp` has no scalar overload).

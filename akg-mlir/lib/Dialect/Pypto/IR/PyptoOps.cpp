@@ -466,6 +466,32 @@ LogicalResult MinOp::verify() { return verifyBinaryShape(*this); }
 // G. Reduction and scalar IO
 //===----------------------------------------------------------------------===//
 
+LogicalResult FillPadExpandOp::verify() {
+  if (getPadValue() != "zero" && getPadValue() != "min" && getPadValue() != "max") {
+    return emitOpError("padding mode must be zero, min or max");
+  }
+  auto sourceShape = getShapeIfKnown(getSource().getType());
+  auto resultShape = getShapeIfKnown(getResult().getType());
+  if (!resultShape || resultShape->size() != 2 ||
+      llvm::any_of(*resultShape, [](int64_t dim) { return dim <= 0; })) {
+    return emitOpError("result must be a statically shaped positive 2D tile");
+  }
+  if (sourceShape) {
+    if (sourceShape->size() != 2) return emitOpError("source must be a 2D tile");
+    for (auto [sourceDim, resultDim] : llvm::zip(*sourceShape, *resultShape)) {
+      if (!ShapedType::isDynamic(sourceDim) && sourceDim > resultDim) {
+        return emitOpError("result cannot shrink a source dimension");
+      }
+    }
+  }
+  auto sourceElement = getElementTypeIfKnown(getSource().getType());
+  auto resultElement = getElementTypeIfKnown(getResult().getType());
+  if (sourceElement && resultElement && *sourceElement != *resultElement) {
+    return emitOpError("source and result element types must match");
+  }
+  return success();
+}
+
 LogicalResult ReductionOp::verify() {
   // The vector may be a !pypto.tile or, during the incremental lowering,
   // the source shaped type (vector/npuvector) it was derived from. The
