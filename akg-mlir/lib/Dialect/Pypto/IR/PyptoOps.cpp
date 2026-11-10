@@ -17,11 +17,13 @@
 #include "akg/Dialect/Pypto/IR/PyptoOps.h"
 
 #include <algorithm>
+#include <numeric>
 #include <optional>
 #include <string>
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -61,6 +63,38 @@ std::optional<Type> getElementTypeIfKnown(Type type) {
     return shaped.getElementType();
   }
   return std::nullopt;
+}
+
+// Check explicit allocation bounds, not the logical shape of views or
+// comparison masks. Runtime bounds are checked by the PyPTO backend.
+LogicalResult verifyAllocationAlignment(Operation *op, Type type, ValueRange extents = {}) {
+  std::optional<Type> elementType = getElementTypeIfKnown(type);
+  if (!elementType || !TileType::isValidElementType(*elementType)) {
+    return success();
+  }
+  int64_t trailing;
+  if (!extents.empty()) {
+    APInt bound;
+    if (!matchPattern(extents.back(), m_ConstantInt(&bound))) {
+      return success();
+    }
+    trailing = bound.getSExtValue();
+  } else {
+    std::optional<SmallVector<int64_t>> shape = getShapeIfKnown(type);
+    if (!shape || shape->empty() || ShapedType::isDynamic(shape->back())) {
+      return success();
+    }
+    trailing = shape->back();
+  }
+  // Explicit BOOL allocations use one byte; index lowers to INT64.
+  unsigned elementBits = isa<IndexType>(*elementType) ? 64 : elementType->getIntOrFloatBitWidth();
+  unsigned elementBytes = (elementBits + 7) / 8;
+  unsigned alignedElements = 32 / std::gcd(32u, elementBytes);
+  if (trailing % alignedElements != 0) {
+    return op->emitOpError("allocation trailing dimension must be a multiple of ")
+           << alignedElements << " for 32-byte alignment, got " << trailing << " for " << *elementType;
+  }
+  return success();
 }
 
 // Returns the total element count, or std::nullopt when any dimension is
@@ -143,14 +177,18 @@ LogicalResult TileFullOp::verify() {
   // empty for statically shaped results. During the incremental lowering
   // the result may carry the source shaped type instead of a !pypto.tile.
   if (getExtents().empty()) {
-    return success();
+    return verifyAllocationAlignment(getOperation(), getResult().getType());
   }
   std::optional<SmallVector<int64_t>> shape = getShapeIfKnown(getResult().getType());
   if (!shape || shape->size() != getExtents().size()) {
     return emitOpError("extents (") << getExtents().size() << ") must be empty or match the result rank ("
                                     << (shape ? shape->size() : 0) << ")";
   }
-  return success();
+  return verifyAllocationAlignment(getOperation(), getResult().getType(), getExtents());
+}
+
+LogicalResult CreateTileOp::verify() {
+  return verifyAllocationAlignment(getOperation(), getResult().getType());
 }
 
 //===----------------------------------------------------------------------===//
@@ -599,7 +637,7 @@ LogicalResult LoadOp::verify() {
   if (padded != 0 && padded != srcRank) {
     return emitOpError("number of padded shapes (") << padded << ") must match the source rank (" << srcRank << ")";
   }
-  return success();
+  return verifyAllocationAlignment(getOperation(), getResult().getType(), getPaddedShapes());
 }
 
 LogicalResult StoreOp::verify() {

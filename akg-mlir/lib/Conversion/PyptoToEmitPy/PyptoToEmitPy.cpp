@@ -1498,9 +1498,13 @@ class LoadOpPattern : public OpConversionPattern<pypto::LoadOp> {
     if (validExtents.size() != paddedShapes.size()) {
       return rewriter.notifyMatchFailure(op, "dynamic load needs per-dimension padded/valid extents");
     }
-    // A `?` extent cannot be spelled as an annotation; the call keeps the
-    // source result type, which the Python translator accepts for
-    // call_opaque results (as it does for dynamic vector tiles).
+    // Constant allocation bounds may already have refined the result to a
+    // static Tile. Convert that type just like the non-padded load path;
+    // genuinely dynamic tiles retain the type converter's dynamic form.
+    Type resultType = getTypeConverter()->convertType(op.getResult().getType());
+    if (!resultType) {
+      return rewriter.notifyMatchFailure(op, "tile element type has no PyPTO dtype");
+    }
     SmallVector<Value> operands{adaptor.getSource()};
     Attribute offsetsArg = buildOffsetsArg(rewriter, adaptor.getOffsets(), operands);
     Attribute shapesArg = buildOffsetsArg(rewriter, paddedShapes, operands);
@@ -1508,7 +1512,7 @@ class LoadOpPattern : public OpConversionPattern<pypto::LoadOp> {
     SmallVector<Attribute> args{rewriter.getIndexAttr(0), offsetsArg, shapesArg, validArg};
     SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr(""),
                                     rewriter.getStringAttr("")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, op.getResult().getType(), "pl.load", ValueRange(operands),
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.load", ValueRange(operands),
                                                       rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();
   }
@@ -1588,15 +1592,15 @@ static void foldIdentitySliceCalls(func::FuncOp funcOp) {
 
 /// Loads a tile parameter into the local (core) view: the entry block
 /// argument becomes a `pl.load` of the annotated parameter.
-static void loadTileParameter(OpBuilder &builder, BlockArgument arg, ShapedType shaped) {
+static void loadTileParameter(OpBuilder &builder, BlockArgument arg, Type resultType, ArrayRef<int64_t> shape) {
   SmallVector<Attribute> loadArgs{
     builder.getIndexAttr(0),
-    builder.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(SmallVector<int64_t>(shaped.getRank(), 0))),
-    builder.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(shaped.getShape()))};
+    builder.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(SmallVector<int64_t>(shape.size(), 0))),
+    builder.getAttr<emitpy::OpaqueAttr>(shapeToPythonListText(shape))};
   SmallVector<Attribute> loadKeywords{builder.getStringAttr(""), builder.getStringAttr(""), builder.getStringAttr("")};
   SmallVector<Value> loadOperands{arg};
   Value load = builder
-                 .create<emitpy::CallOpaqueOp>(arg.getLoc(), shaped, "pl.load", ValueRange(loadOperands),
+                 .create<emitpy::CallOpaqueOp>(arg.getLoc(), resultType, "pl.load", ValueRange(loadOperands),
                                                builder.getArrayAttr(loadArgs), builder.getArrayAttr(loadKeywords))
                  .getResult(0);
   for (OpOperand &use : llvm::make_early_inc_range(arg.getUses())) {
@@ -1611,9 +1615,9 @@ static void loadTileParameter(OpBuilder &builder, BlockArgument arg, ShapedType 
 /// every parameter becomes an opaque annotation, vector results are
 /// turned into out parameters (already folded by the vector-to-pypto
 /// stage), and tile parameters get an explicit `pl.load` prologue.
-static LogicalResult rewriteSignature(func::FuncOp funcOp, MLIRContext *ctx) {
+static LogicalResult rewriteSignature(func::FuncOp funcOp, MLIRContext *ctx, ArrayRef<Type> originalInputs,
+                                      PyptoToEmitPyTypeConverter &typeConverter) {
   Block &entry = funcOp.getBody().front();
-  auto funcType = funcOp.getFunctionType();
   DenseSet<unsigned> outOnlyArgs;
   if (auto outList = funcOp->getAttrOfType<DenseI64ArrayAttr>(kOutArgsAttr)) {
     for (int64_t argNo : outList.asArrayRef()) {
@@ -1623,7 +1627,7 @@ static LogicalResult rewriteSignature(func::FuncOp funcOp, MLIRContext *ctx) {
   SmallVector<Type> newInputs;
   OpBuilder builder(ctx);
   builder.setInsertionPointToStart(&entry);
-  for (auto [idx, type] : llvm::enumerate(funcType.getInputs())) {
+  for (auto [idx, type] : llvm::enumerate(originalInputs)) {
     Type annotation;
     if (outOnlyArgs.contains(static_cast<unsigned>(idx))) {
       if (auto shaped = dyn_cast<ShapedType>(type);
@@ -1642,8 +1646,15 @@ static LogicalResult rewriteSignature(func::FuncOp funcOp, MLIRContext *ctx) {
     newInputs.push_back(annotation);
     BlockArgument arg = entry.getArgument(idx);
     arg.setType(annotation);
-    if ((isa<VectorType>(type) || isa<npuvector::NPUVectorType>(type)) && !arg.use_empty()) {
-      loadTileParameter(builder, arg, cast<ShapedType>(type));
+    if (!arg.use_empty() && isa<pypto::TileType, VectorType, npuvector::NPUVectorType>(type)) {
+      // Legacy vector types keep the pass converter's identity mapping.
+      Type resultType = typeConverter.convertType(type);
+      if (!resultType) {
+        return funcOp->emitError("parameter ") << idx << " load result type has no emitpy counterpart";
+      }
+      auto tile = dyn_cast<pypto::TileType>(type);
+      ArrayRef<int64_t> shape = tile ? tile.getShape() : cast<ShapedType>(type).getShape();
+      loadTileParameter(builder, arg, resultType, shape);
     }
   }
   funcOp.setType(FunctionType::get(ctx, newInputs, {}));
@@ -1738,6 +1749,7 @@ struct ConvertPyptoToEmitPyPass : impl::ConvertPyptoToEmitPyBase<ConvertPyptoToE
 
   void runOnOperation() override {
     func::FuncOp funcOp = getOperation();
+    SmallVector<Type> originalInputs(funcOp.getArgumentTypes());
     PyptoToEmitPyTypeConverter typeConverter;
     ConversionTarget target(getContext());
     target.addIllegalDialect<pypto::PyptoDialect>();
@@ -1813,7 +1825,7 @@ struct ConvertPyptoToEmitPyPass : impl::ConvertPyptoToEmitPyBase<ConvertPyptoToE
     // marker and is emitted as-is.
     if (funcOp->getAttr(kPyptoKernelAttr)) {
       eraseDeadOps(funcOp);
-      if (failed(rewriteSignature(funcOp, &getContext()))) {
+      if (failed(rewriteSignature(funcOp, &getContext(), originalInputs, typeConverter))) {
         signalPassFailure();
         return;
       }
