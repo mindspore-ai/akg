@@ -91,6 +91,62 @@ def _is_matmul_op(desc):
     return False
 
 
+def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_indexes, options):
+    """Compile and run once, copying only result buffers back for AKG comparison.
+
+    The compiled parameter contract supplies physical shapes and dtypes. In
+    particular BF16 must never be inferred from an FP32 NumPy reference.
+    Inputs and the NumPy golden stay in memory throughout the benchmark.
+    """
+    # Load optional PTO dependencies only when this backend is selected.
+    # pylint: disable=import-outside-toplevel
+    import torch
+    import torch_npu  # pylint: disable=unused-import
+    from akg.backends.ascend import ascend_compile
+    from pypto.ir.compiled_artifact import CompiledArtifact
+    from pypto.ir.param_info import _to_torch_dtype
+    # pylint: enable=import-outside-toplevel
+
+    compiled = ascend_compile(
+        str(input_file), str(output_dir), kernel_name=kernel_name, arch=arch or None,
+        backend="pypto", opt_level=options.opt_level, enable_loop_fusion=True,
+        dump_ir=options.dump_ir, mlir_timing=options.mlir_timing,
+        dump_ir_path=str(pathlib.Path(output_dir) / f"{kernel_name}_opt.log"),
+        num_outputs=len(output_indexes))
+    artifact = CompiledArtifact.from_dir(compiled.path)
+    parameters = artifact.metadata.parameters
+    if len(parameters) != len(buffers):
+        raise ValueError(f"{kernel_name}: compiled parameters={len(parameters)}, "
+                         f"benchmark buffers={len(buffers)}")
+    device_id = getattr(options, "device_id", None)
+    if device_id is None:
+        device_id = int(os.environ.get("DEVICE_ID", "0"))
+    torch.npu.set_device(device_id)
+    arguments = []
+    for parameter, buffer in zip(parameters, buffers):
+        if parameter.shape is None:
+            arguments.append(np.asarray(buffer).item())
+            continue
+        array = np.asarray(buffer)
+        if array.dtype.name == "bfloat16":
+            array = array.astype(np.float32)
+        dtype = _to_torch_dtype(parameter.dtype)
+        if dtype is None:
+            raise ValueError(f"unsupported benchmark dtype: {parameter.dtype}")
+        tensor = torch.from_numpy(np.array(array, copy=True)).to(dtype=dtype)
+        # AKG represents scalar tensors as [1]; use the compiled ABI shape.
+        tensor = tensor.reshape(tuple(parameter.shape)).to(f"npu:{device_id}")
+        arguments.append(tensor)
+    stream = torch.npu.current_stream(device_id)
+    compiled.launcher(*arguments, stream=stream.npu_stream)
+    stream.synchronize()
+    for index in output_indexes:
+        result = arguments[index].detach().cpu()
+        if result.dtype == torch.bfloat16:
+            result = result.float()
+        buffers[index] = result.numpy().reshape(np.asarray(buffers[index]).shape)
+
+
 def run_a_kernel(desc, file_path, compile_args, static_desc=None):
     """function to run a single kernel"""
     is_dyn_shape = static_desc is not None
@@ -104,27 +160,33 @@ def run_a_kernel(desc, file_path, compile_args, static_desc=None):
     kernel_name = _get_kernel_name(desc)
     dump_dir = pathlib.Path(get_kernel_meta_path()) / kernel_name
     dump_dir.mkdir(parents=True, exist_ok=True)
-    arch = _get_arch_name(desc)
+    arch = getattr(compile_args, "arch", "") or _get_arch_name(desc)
     # Generate data
     input_for_mod, expect, output_indexes = gen_json_data(static_desc if is_dyn_shape else desc, with_compute=True)
-    # Init MlirDriver
-    mlir_driver = MlirDriver(kernel_name=kernel_name,
-                             input_file=file_path,
-                             output_dir=dump_dir,
-                             backend=backend,
-                             llvm_tools_dir=os.getenv("LLVM_HOME", ""),
-                             dynamic_shape=is_dyn_shape,
-                             dump_ir=compile_args.dump_ir,
-                             mlir_timing=compile_args.mlir_timing,
-                             repo_path=compile_args.repo_path,
-                             profiling_trails=compile_args.prof_trails,
-                             runtime_provider="MLIR",
-                             enable_loop_fusion=compile_args.akg_fusion,
-                             opt_level=compile_args.opt_level,
-                             arch=arch)
+    if getattr(compile_args, "ascend_backend", "bisheng") == "pypto":
+        if backend != "ascend" or is_dyn_shape or not compile_args.akg_fusion:
+            raise ValueError("PyPTO requires static shapes, --backend ascend and --akg_fusion 1")
+        run_pypto_kernel(file_path, dump_dir, kernel_name, arch, input_for_mod,
+                         output_indexes, compile_args)
+    else:
+        # Init MlirDriver
+        mlir_driver = MlirDriver(kernel_name=kernel_name,
+                                 input_file=file_path,
+                                 output_dir=dump_dir,
+                                 backend=backend,
+                                 llvm_tools_dir=os.getenv("LLVM_HOME", ""),
+                                 dynamic_shape=is_dyn_shape,
+                                 dump_ir=compile_args.dump_ir,
+                                 mlir_timing=compile_args.mlir_timing,
+                                 repo_path=compile_args.repo_path,
+                                 profiling_trails=compile_args.prof_trails,
+                                 runtime_provider="MLIR",
+                                 enable_loop_fusion=compile_args.akg_fusion,
+                                 opt_level=compile_args.opt_level,
+                                 arch=arch)
 
-    mlir_driver.compile()
-    mlir_driver.run(input_for_mod, output_indexes)
+        mlir_driver.compile()
+        mlir_driver.run(input_for_mod, output_indexes)
 
     for idx, d in enumerate(expect):
         expect[idx] = d.astype(np.float32) if d.dtype.name == "bfloat16" else d
@@ -258,6 +320,10 @@ def main(args=None):
                         required=False,
                         default="",
                         help="Hardware environment: cpu, gpu or ascend.")
+    parser.add_argument("--ascend-backend", choices=["bisheng", "pypto"], default="bisheng",
+                        help="Ascend compiler used for compilation and precision checking")
+    parser.add_argument("--arch", default="", help="Override target architecture in the descriptor")
+    parser.add_argument("--device-id", type=int, default=None, help="NPU device (defaults to DEVICE_ID or 0)")
     parser.add_argument("-f", "--file", type=str, default="")
     parser.add_argument("-d", "--dir", type=str, default="")
     parser.add_argument("-tr",
@@ -278,6 +344,8 @@ def main(args=None):
                         help="Ascend optimization level passed to --ascend-opt (default: 2). "
                              "Supports -O1/-O2 and -ol 1/-ol 2.")
     args = parser.parse_args()
+    if args.device_id is not None:
+        os.environ["DEVICE_ID"] = str(args.device_id)
     if args.dir:
         files = [
             f for f in os.listdir(args.dir)
