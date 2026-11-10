@@ -1,6 +1,6 @@
-// RUN: akg-opt %s -convert-vector-to-pypto -convert-pypto-to-emitpy | FileCheck %s
-// RUN: akg-opt %s -convert-vector-to-pypto | FileCheck %s --check-prefix=PYPTO
-// RUN: akg-opt %s -convert-vector-to-pypto | akg-opt -convert-pypto-to-emitpy | FileCheck %s
+// RUN: akg-opt %s -convert-vector-to-pypto -convert-pypto-to-emitpy | FileCheck %s --implicit-check-not='!npuvector' --implicit-check-not='unrealized_conversion_cast'
+// RUN: akg-opt %s -convert-vector-to-pypto | FileCheck %s --check-prefix=PYPTO --implicit-check-not='!npuvector' --implicit-check-not='unrealized_conversion_cast'
+// RUN: akg-opt %s -convert-vector-to-pypto | akg-opt -convert-pypto-to-emitpy | FileCheck %s --implicit-check-not='!npuvector' --implicit-check-not='unrealized_conversion_cast'
 
 func.func @test_elementwise(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %arg2 : memref<32x32xf32>) {
   // CHECK-LABEL: func.func @test_elementwise(
@@ -67,11 +67,11 @@ func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 
   // scratch tile and the reduction chain all sit in the pypto layer after
   // the first stage.
   // PYPTO-LABEL: func.func @test_npuvector_ops(
-  // PYPTO: %[[T:.*]] = pypto.transpose %arg0, 0, 1 : !npuvector<8x16xf32> to !npuvector<16x8xf32>
-  // PYPTO: %[[M:.*]] = pypto.mul %[[T]], %arg1 : !npuvector<16x8xf32>, f32 to !npuvector<16x8xf32>
+  // PYPTO: %[[T:.*]] = pypto.transpose %arg0, 0, 1 : !pypto.tile<f32, [8, 16]> to !pypto.tile<f32, [16, 8]>
+  // PYPTO: %[[M:.*]] = pypto.mul %[[T]], %arg1 : !pypto.tile<f32, [16, 8]>, f32 to !pypto.tile<f32, [16, 8]>
   // The full row reduction works in the scratch tile and yields a scalar.
   // PYPTO: %[[ROW_TMP:.*]] = pypto.create_tile : <f32, [16, 8]>
-  // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, %[[M]], %[[ROW_TMP]] : !npuvector<16x8xf32>, {{.*}} -> f32
+  // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, %[[M]], %[[ROW_TMP]] : !pypto.tile<f32, [16, 8]>, {{.*}} -> f32
   // The surviving rows are read out and combined with scalar arith; the
   // coordinates are arith constants named after their values.
   // PYPTO: %[[R0:.*]] = pypto.read %[[ROW]][%c0, %c0_0] : f32 -> f32
@@ -80,8 +80,8 @@ func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 
   // The scalar result goes straight into the [1] output tensor.
   // PYPTO: pypto.write %arg2[{{.*}}], {{.*}} : memref<1xf32>, f32
 
-  %t = npuvector.transpose %arg0, [1, 0] : !npuvector<8x16xf32> to !npuvector<16x8xf32>
   %b = npuvector.broadcast %arg1 : f32 to !npuvector<16x8xf32>
+  %t = npuvector.transpose %arg0, [1, 0] : !npuvector<8x16xf32> to !npuvector<16x8xf32>
   %m = arith.mulf %t, %b : !npuvector<16x8xf32>
   %r = npuvector.reduction <add>, %m : !npuvector<16x8xf32> into f32
   return %r : f32
@@ -89,7 +89,7 @@ func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 
 
 // -----
 
-func.func @test_scalar_broadcast_fusion(%arg0 : memref<1x8xf32>, %arg1 : memref<1x8xf32>, %arg2 : memref<1x8xf32>) {
+func.func @test_scalar_broadcast_fusion(%arg0 : memref<1x32xf32>, %arg1 : memref<1x32xf32>, %arg2 : memref<1x32xf32>) {
   // CHECK-LABEL: func.func @test_scalar_broadcast_fusion(
   // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP32
   // CHECK-SAME: attributes {emitpy.out_args = array<i64: 2>, emitpy.pypto_kernel
@@ -105,27 +105,27 @@ func.func @test_scalar_broadcast_fusion(%arg0 : memref<1x8xf32>, %arg1 : memref<
 
   // PYPTO-LABEL: func.func @test_scalar_broadcast_fusion(
   // PYPTO: %[[CST:.*]] = pypto.constant "0.0" : f32
-  // PYPTO: %[[V0:.*]] = pypto.load %arg0[{{.*}}] : memref<1x8xf32> -> !npuvector<1x8xf32>
-  // PYPTO: %[[V1:.*]] = pypto.load %arg1[{{.*}}] : memref<1x8xf32> -> !npuvector<1x8xf32>
+  // PYPTO: %[[V0:.*]] = pypto.load %arg0[{{.*}}] : memref<1x32xf32> -> !pypto.tile<f32, [1, 32]>
+  // PYPTO: %[[V1:.*]] = pypto.load %arg1[{{.*}}] : memref<1x32xf32> -> !pypto.tile<f32, [1, 32]>
   // PYPTO-NOT: pypto.tile_full
-  // PYPTO: %[[CMP:.*]] = pypto.cmp {{ *}}le, %[[V0]], %[[CST]] : !npuvector<1x8xf32>, f32 -> !npuvector<1x8xi1>
-  // PYPTO: pypto.select %[[CMP]], %[[CST]], %[[V1]] : !npuvector<1x8xi1>, f32, !npuvector<1x8xf32> to !npuvector<1x8xf32>
+  // PYPTO: %[[CMP:.*]] = pypto.cmp {{ *}}le, %[[V0]], %[[CST]] : !pypto.tile<f32, [1, 32]>, f32 -> !pypto.tile<i1, [1, 32]>
+  // PYPTO: pypto.select %[[CMP]], %[[CST]], %[[V1]] : !pypto.tile<i1, [1, 32]>, f32, !pypto.tile<f32, [1, 32]> to !pypto.tile<f32, [1, 32]>
   // PYPTO: pypto.store {{.*}}, %arg2[{{.*}}]
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
-  %v0 = npuvector.transfer_read %arg0[%c0, %c0], %cst : memref<1x8xf32>, !npuvector<1x8xf32>
-  %v1 = npuvector.transfer_read %arg1[%c0, %c0], %cst : memref<1x8xf32>, !npuvector<1x8xf32>
-  %b = npuvector.broadcast %cst : f32 to !npuvector<1x8xf32>
-  %cmp = npuvector.cmpf ole, %v0, %b : !npuvector<1x8xf32> to !npuvector<1x8xi1>
-  %sel = npuvector.select %cmp, %b, %v1 : !npuvector<1x8xi1>, !npuvector<1x8xf32>
-  npuvector.transfer_write %sel, %arg2[%c0, %c0] : !npuvector<1x8xf32>, memref<1x8xf32>
+  %b = npuvector.broadcast %cst : f32 to !npuvector<1x32xf32>
+  %v0 = npuvector.transfer_read %arg0[%c0, %c0], %cst : memref<1x32xf32>, !npuvector<1x32xf32>
+  %v1 = npuvector.transfer_read %arg1[%c0, %c0], %cst : memref<1x32xf32>, !npuvector<1x32xf32>
+  %cmp = npuvector.cmpf ole, %v0, %b : !npuvector<1x32xf32> to !npuvector<1x32xi1>
+  %sel = npuvector.select %cmp, %b, %v1 : !npuvector<1x32xi1>, !npuvector<1x32xf32>
+  npuvector.transfer_write %sel, %arg2[%c0, %c0] : !npuvector<1x32xf32>, memref<1x32xf32>
   return
 }
 
 // -----
 
-func.func @test_scalar_broadcast_no_fusion(%arg0 : memref<1x8xf32>, %arg1 : memref<1x8xf32>, %arg2 : memref<1x8xf32>) {
+func.func @test_scalar_broadcast_no_fusion(%arg0 : memref<1x32xf32>, %arg1 : memref<1x32xf32>, %arg2 : memref<1x32xf32>) {
   // CHECK-LABEL: func.func @test_scalar_broadcast_no_fusion(
   // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP32
   // CHECK-SAME: attributes {emitpy.out_args = array<i64: 2>, emitpy.pypto_kernel
@@ -140,21 +140,21 @@ func.func @test_scalar_broadcast_no_fusion(%arg0 : memref<1x8xf32>, %arg1 : memr
   // CHECK: emitpy.call_opaque "pl.store"
 
   // PYPTO-LABEL: func.func @test_scalar_broadcast_no_fusion(
-  // PYPTO: %[[V0:.*]] = pypto.load %arg0[{{.*}}] : memref<1x8xf32> -> !npuvector<1x8xf32>
-  // PYPTO: %[[V1:.*]] = pypto.load %arg1[{{.*}}] : memref<1x8xf32> -> !npuvector<1x8xf32>
-  // PYPTO: %[[CARRIER:.*]] = pypto.tile_full "0.0" : !npuvector<1x8xf32>
-  // PYPTO: %[[CMP:.*]] = pypto.cmp {{ *}}le, %[[CARRIER]], %[[V0]] : !npuvector<1x8xf32>, !npuvector<1x8xf32> -> !npuvector<1x8xi1>
-  // PYPTO: pypto.select %[[CMP]], %[[CARRIER]], %[[V1]] : !npuvector<1x8xi1>, !npuvector<1x8xf32>, !npuvector<1x8xf32> to !npuvector<1x8xf32>
+  // PYPTO: %[[V0:.*]] = pypto.load %arg0[{{.*}}] : memref<1x32xf32> -> !pypto.tile<f32, [1, 32]>
+  // PYPTO: %[[V1:.*]] = pypto.load %arg1[{{.*}}] : memref<1x32xf32> -> !pypto.tile<f32, [1, 32]>
+  // PYPTO: %[[CARRIER:.*]] = pypto.tile_full "0.0" : !pypto.tile<f32, [1, 32]>
+  // PYPTO: %[[CMP:.*]] = pypto.cmp {{ *}}le, %[[CARRIER]], %[[V0]] : !pypto.tile<f32, [1, 32]>, !pypto.tile<f32, [1, 32]> -> !pypto.tile<i1, [1, 32]>
+  // PYPTO: pypto.select %[[CMP]], %[[CARRIER]], %[[V1]] : !pypto.tile<i1, [1, 32]>, !pypto.tile<f32, [1, 32]>, !pypto.tile<f32, [1, 32]> to !pypto.tile<f32, [1, 32]>
   // PYPTO: pypto.store {{.*}}, %arg2[{{.*}}]
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 0.0 : f32
-  %v0 = npuvector.transfer_read %arg0[%c0, %c0], %cst : memref<1x8xf32>, !npuvector<1x8xf32>
-  %v1 = npuvector.transfer_read %arg1[%c0, %c0], %cst : memref<1x8xf32>, !npuvector<1x8xf32>
-  %b = npuvector.broadcast %cst : f32 to !npuvector<1x8xf32>
-  %cmp = npuvector.cmpf ole, %b, %v0 : !npuvector<1x8xf32> to !npuvector<1x8xi1>
-  %sel = npuvector.select %cmp, %b, %v1 : !npuvector<1x8xi1>, !npuvector<1x8xf32>
-  npuvector.transfer_write %sel, %arg2[%c0, %c0] : !npuvector<1x8xf32>, memref<1x8xf32>
+  %v0 = npuvector.transfer_read %arg0[%c0, %c0], %cst : memref<1x32xf32>, !npuvector<1x32xf32>
+  %v1 = npuvector.transfer_read %arg1[%c0, %c0], %cst : memref<1x32xf32>, !npuvector<1x32xf32>
+  %b = npuvector.broadcast %cst : f32 to !npuvector<1x32xf32>
+  %cmp = npuvector.cmpf ole, %b, %v0 : !npuvector<1x32xf32> to !npuvector<1x32xi1>
+  %sel = npuvector.select %cmp, %b, %v1 : !npuvector<1x32xi1>, !npuvector<1x32xf32>
+  npuvector.transfer_write %sel, %arg2[%c0, %c0] : !npuvector<1x32xf32>, memref<1x32xf32>
   return
 }
 
@@ -164,37 +164,44 @@ func.func @test_scalar_broadcast_div_fusion(%arg0 : memref<1x8xf32>, %arg1 : mem
   // CHECK-LABEL: func.func @test_scalar_broadcast_div_fusion(
   // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP32
   // CHECK-SAME: attributes {emitpy.out_args = array<i64: 1>, emitpy.pypto_kernel
-  // A scalar broadcast on a division's lhs -- the weighting form
-  // `scalar / tile` -- fuses into `recip(tile) * scalar`: `pl.div` demands
-  // one shared shape across its operands, but the reciprocal preserves
-  // the tile's own shape and no carrier tile is materialized.
-  // CHECK-NOT: "pl.tile.full"
   // CHECK: %[[C:.*]] = emitpy.call_opaque "pl.const"() {{.*}}"2.0"{{.*}}pl.FP32
+  // CHECK-NOT: "pl.tile.full"
   // CHECK: %[[V0:.*]] = emitpy.call_opaque "pl.load"(%arg0)
+  // CHECK-NOT: "pl.tile.full"
   // CHECK: %[[R:.*]] = emitpy.call_opaque "pl.recip"(%[[V0]])
-  // CHECK: emitpy.call_opaque "pl.mul"(%[[R]], %[[C]])
-  // CHECK: emitpy.call_opaque "pl.store"
+  // CHECK: %[[Q:.*]] = emitpy.call_opaque "pl.mul"(%[[R]], %[[C]])
+  // CHECK: %[[UPPER:.*]] = emitpy.call_opaque "pl.minimums"(%[[Q]], {{.*}})
+  // CHECK: %[[CLAMPED:.*]] = emitpy.call_opaque "pl.maximums"(%[[UPPER]], {{.*}})
+  // CHECK-NOT: "pl.tile.full"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[CLAMPED]], %arg1)
 
   // PYPTO-LABEL: func.func @test_scalar_broadcast_div_fusion(
   // PYPTO: %[[CST:.*]] = pypto.constant "2.0" : f32
-  // PYPTO: %[[V0:.*]] = pypto.load %arg0[{{.*}}] : memref<1x8xf32> -> !npuvector<1x8xf32>
-  // PYPTO-NOT: pypto.tile_full
-  // PYPTO: %[[RECIP:.*]] = pypto.recip %[[V0]] : !npuvector<1x8xf32> to !npuvector<1x8xf32>
-  // PYPTO: pypto.mul %[[RECIP]], %[[CST]] : !npuvector<1x8xf32>, f32 to !npuvector<1x8xf32>
-  // PYPTO: pypto.store {{.*}}, %arg1[{{.*}}]
+  // PYPTO: %[[V0:.*]] = pypto.load %arg0[{{.*}}] : memref<1x8xf32> -> !pypto.tile<f32, [1, 8]>
+  // PYPTO: %[[RECIP:.*]] = pypto.recip %[[V0]] : !pypto.tile<f32, [1, 8]> to !pypto.tile<f32, [1, 8]>
+  // PYPTO: %[[Q:.*]] = pypto.mul %[[RECIP]], %[[CST]] : !pypto.tile<f32, [1, 8]>, f32 to !pypto.tile<f32, [1, 8]>
+  // PYPTO: %[[UPPER:.*]] = pypto.minimums %[[Q]], {{.*}} : !pypto.tile<f32, [1, 8]>, f32 to !pypto.tile<f32, [1, 8]>
+  // PYPTO: %[[CLAMPED:.*]] = pypto.maximums %[[UPPER]], {{.*}} : !pypto.tile<f32, [1, 8]>, f32 to !pypto.tile<f32, [1, 8]>
+  // PYPTO: pypto.store %[[CLAMPED]], %arg1[{{.*}}]
 
   %c0 = arith.constant 0 : index
   %cst = arith.constant 2.0 : f32
-  %v0 = npuvector.transfer_read %arg0[%c0, %c0], %cst : memref<1x8xf32>, !npuvector<1x8xf32>
+  %lo = arith.constant -2.0 : f32
+  %hi = arith.constant 3.0 : f32
   %b = npuvector.broadcast %cst : f32 to !npuvector<1x8xf32>
+  %lower = npuvector.broadcast %lo : f32 to !npuvector<1x8xf32>
+  %upper = npuvector.broadcast %hi : f32 to !npuvector<1x8xf32>
+  %v0 = npuvector.transfer_read %arg0[%c0, %c0], %cst : memref<1x8xf32>, !npuvector<1x8xf32>
   %q = arith.divf %b, %v0 : !npuvector<1x8xf32>
-  npuvector.transfer_write %q, %arg1[%c0, %c0] : !npuvector<1x8xf32>, memref<1x8xf32>
+  %capped = arith.minimumf %upper, %q : !npuvector<1x8xf32>
+  %clamped = arith.maximumf %capped, %lower : !npuvector<1x8xf32>
+  npuvector.transfer_write %clamped, %arg1[%c0, %c0] : !npuvector<1x8xf32>, memref<1x8xf32>
   return
 }
 
 // -----
 
-func.func @test_partial_reduction_and_casts(%arg0 : !npuvector<4x8xi32>) -> !npuvector<4xi32> {
+func.func @test_partial_reduction_and_casts(%arg0 : !npuvector<4x8xi32>) -> !npuvector<8xi32> {
   // CHECK-LABEL: func.func @test_partial_reduction_and_casts(
   // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.INT32
   // CHECK-SAME: %arg1: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.INT32
@@ -202,34 +209,25 @@ func.func @test_partial_reduction_and_casts(%arg0 : !npuvector<4x8xi32>) -> !npu
   // CHECK: %[[V0:.*]] = emitpy.call_opaque "pl.load"(%arg0)
   // Partial reductions consume a scratch tile.
   // CHECK: %[[TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
-  // CHECK: %[[R:.*]] = emitpy.call_opaque "pl.row_max"(%[[V0]], %[[TMP]])
-  // The reduction yields a rank-2 [4, 1] tile; the casts run in npuvector
-  // space, so the result first reshapes back to [4].
+  // CHECK: %[[R:.*]] = emitpy.call_opaque "pl.col_max"(%[[V0]], %[[TMP]])
+  // The column reduction keeps [1, 8], then reshapes to the aligned
+  // rank-1 result before the dtype casts and output store.
   // CHECK: %[[RR:.*]] = emitpy.call_opaque "pl.reshape"(%[[R]])
   // CHECK: %[[E:.*]] = emitpy.call_opaque "pl.cast"(%[[RR]]) {{.*}}"pl.INT64"
   // CHECK: %[[W:.*]] = emitpy.call_opaque "pl.cast"(%[[E]]) {{.*}}"pl.INT32"
-  // The [4] output row is shorter than a 32-byte unit, so it is written
-  // element by element into the rank-2 view of the output.
-  // CHECK: %[[E0:.*]] = emitpy.call_opaque "pl.read"(%[[W]])
-  // CHECK: emitpy.call_opaque "pl.write"({{.*}}, %[[E0]])
+  // CHECK: emitpy.call_opaque "pl.store"({{.*}}, {{.*}})
 
-  // The partial reduction, the dtype casts, the scalar reads, the scratch
-  // tile and the element-wise [4] store all ride in the pypto layer after
-  // the first stage.
   // PYPTO-LABEL: func.func @test_partial_reduction_and_casts(
   // PYPTO: %[[TMP:.*]] = pypto.create_tile : <i32, [4, 8]>
-  // PYPTO: %[[R:.*]] = pypto.reduction max, row, %arg0, %[[TMP]] : !npuvector<4x8xi32>, {{.*}} -> !npuvector<4xi32>
-  // PYPTO: %[[E:.*]] = pypto.cast %[[R]] : !npuvector<4xi32> to !npuvector<4xi64>
-  // PYPTO: %[[W:.*]] = pypto.cast %[[E]] : !npuvector<4xi64> to !npuvector<4xi32>
-  // The short output row is written element by element into the rank-2
-  // [1, 4] view of the output.
-  // PYPTO: %[[E0:.*]] = pypto.read %[[W]][%c0_0] : !npuvector<4xi32> -> i32
-  // PYPTO: pypto.write %{{.*}}[{{.*}}], %[[E0]] : memref<1x4xi32>, i32
+  // PYPTO: %[[R:.*]] = pypto.reduction max, col, %arg0, %[[TMP]] : !pypto.tile<i32, [4, 8]>, {{.*}} -> !pypto.tile<i32, [8]>
+  // PYPTO: %[[E:.*]] = pypto.cast %[[R]] : !pypto.tile<i32, [8]> to !pypto.tile<i64, [8]>
+  // PYPTO: %[[W:.*]] = pypto.cast %[[E]] : !pypto.tile<i64, [8]> to !pypto.tile<i32, [8]>
+  // PYPTO: pypto.store {{.*}}, {{.*}} : !pypto.tile<i32, [1, 8]>, memref<1x8xi32>
 
-  %r = npuvector.reduction <maxsi>, %arg0 {reduction_dims = array<i64: 1>} : !npuvector<4x8xi32> into !npuvector<4xi32>
-  %e = npuvector.extsi %r : !npuvector<4xi32> to !npuvector<4xi64>
-  %w = npuvector.trunci %e : !npuvector<4xi64> to !npuvector<4xi32>
-  return %w : !npuvector<4xi32>
+  %r = npuvector.reduction <maxsi>, %arg0 {reduction_dims = array<i64: 0>} : !npuvector<4x8xi32> into !npuvector<8xi32>
+  %e = npuvector.extsi %r : !npuvector<8xi32> to !npuvector<8xi64>
+  %w = npuvector.trunci %e : !npuvector<8xi64> to !npuvector<8xi32>
+  return %w : !npuvector<8xi32>
 }
 
 // -----
@@ -260,7 +258,7 @@ func.func @test_rank1_full_reduction(%arg0 : !npuvector<3072xf32>) -> f32 {
   // scalar reads ride in the pypto layer after the first stage; the
   // combine chain keeps scalar arith.
   // PYPTO-LABEL: func.func @test_rank1_full_reduction(
-  // PYPTO: pypto.reshape %arg0 : !npuvector<3072xf32> to !pypto.tile<f32, [8, 384]>
+  // PYPTO: pypto.reshape %arg0 : !pypto.tile<f32, [3072]> to !pypto.tile<f32, [8, 384]>
   // PYPTO: %[[ROW_TMP:.*]] = pypto.create_tile : <f32, [8, 384]>
   // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, {{.*}}, %[[ROW_TMP]] : {{.*}} -> f32
   // PYPTO: %[[S0:.*]] = pypto.read %[[ROW]][%c0, %c0_0] : f32 -> f32
@@ -543,13 +541,13 @@ func.func @test_collapse_and_dynamic_npuvector(%arg0 : memref<64x64xi32>, %arg1 
   // whole 32-byte rows (86 i32 = 344B -> 88 elements = 352B) and carries the
   // runtime valid extent as an operand reference.
   // CHECK: %[[V:.*]] = emitpy.call_opaque "pl.load"(%[[FLAT0]], %[[BEG]], %[[LEN]]) {args = [0 : index, {{\[[0-9]+ : index\]}}, #emitpy.opaque<"{{\[88\]}}">, {{\[[0-9]+ : index\]}}
-  // CHECK-SAME: -> !npuvector<?xi32>
+  // CHECK-SAME: -> !emitpy.opaque<"pl.Tile{{\[\[88\], pl\.INT32\]}}">
   // A broadcast scalar feeding the arith add fuses onto its native
   // tile-first scalar operand: no carrier tile is materialized, so the
   // dtype-relative 32B padding of a carrier never drifts from the load's
   // own allocation.
-  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.add"(%[[V]], %{{.+}}) : (!npuvector<?xi32>, i32) -> !npuvector<?xi32>
-  // The dynamic tile is reshaped into a matching [1, 88] tile and stored
+  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.add"(%[[V]], %{{.+}}) : (!emitpy.opaque<"pl.Tile{{\[\[88\], pl\.INT32\]}}">, i32) -> !emitpy.opaque<"pl.Tile{{\[\[88\], pl\.INT32\]}}">
+  // The padded tile is reshaped into a matching [1, 88] tile and stored
   // through the 2D view, its base offset riding along as a dynamic operand.
   // CHECK: %[[RTILE:.*]] = emitpy.call_opaque "pl.reshape"(%[[SUM]]) {args = [0 : index, #emitpy.opaque<"{{\[1, 88\]}}">
   // CHECK: emitpy.call_opaque "pl.store"(%[[RTILE]], %[[OUT]], {{.+}}, %[[BEG]]) {args = [0 : index, {{\[[0-9]+ : index, [0-9]+ : index\]}}, 1 : index]
@@ -561,7 +559,7 @@ func.func @test_collapse_and_dynamic_npuvector(%arg0 : memref<64x64xi32>, %arg1 
   // PYPTO: %[[FLAT0:.*]] = pypto.reshape %arg0 : memref<64x64xi32> to memref<4096xi32>
   // PYPTO: %[[FLAT1:.*]] = pypto.reshape %arg1 : memref<64x64xi32> to memref<4096xi32>
   // PYPTO: %[[BEG:.*]] = pypto.min {{.*}} : index, index to index
-  // PYPTO: %[[V:.*]] = pypto.load %[[FLAT0]][%[[BEG]]] padded[{{.*}}] valid[{{.*}}] : memref<4096xi32> -> !npuvector<?xi32>
+  // PYPTO: %[[V:.*]] = pypto.load %[[FLAT0]][%[[BEG]]] padded[{{.*}}] valid[{{.*}}] : memref<4096xi32> -> !pypto.tile<i32, [88]>
 
   %c-1 = arith.constant -1 : index
   %c4096 = arith.constant 4096 : index
@@ -716,36 +714,47 @@ func.func @test_scalar_select(%arg0 : memref<1024x1024xf32>, %arg1 : memref<1024
 
 // -----
 
-// A column-uniform row vector lifted to a rank-2 tile by
-// `npuvector.broadcast {dimension = [1]}` never materializes: the consumer
-// folds onto the runtime-native col_expand family. The addf takes the
-// broadcast on its lhs, exercising the commutative operand swap. The lift's
-// reshape spells the source's allocated extent as constant extents on a
-// dynamic `1x?` IR type, which exempts it from the expand's strict
-// row/column count check.
+// Column broadcasts precede the loop-local load and fuse into expand
+// operations once the mapped data Tile is available.
 
-func.func @test_col_broadcast_fusion_static(%arg0 : memref<8x32xf32>, %arg1 : memref<32xf32>, %arg2 : memref<8x32xf32>) {
+func.func @test_col_broadcast_fusion_static(%arg0 : memref<8x32xf32>, %arg1 : memref<32xf32>, %arg2 : memref<8x32xf32>, %arg3 : memref<32xf32>) {
   // CHECK-LABEL: func.func @test_col_broadcast_fusion_static(
-  // CHECK: %[[TILE:.*]] = emitpy.call_opaque "pl.load"(%arg0)
   // CHECK: %[[ROW:.*]] = emitpy.call_opaque "pl.load"(%arg1)
+  // CHECK: %[[BIAS:.*]] = emitpy.call_opaque "pl.load"(%arg3)
+  // CHECK-NOT: "pl.tile.full"
+  // CHECK: emitpy.for
+  // CHECK: %[[TILE:.*]] = emitpy.call_opaque "pl.load"(%arg0,
   // CHECK: %[[VEC:.*]] = emitpy.call_opaque "pl.reshape"(%[[ROW]])
   // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.col_expand_add"(%[[TILE]], %[[VEC]])
-  // CHECK: emitpy.call_opaque "pl.store"(%[[SUM]], %arg2)
+  // CHECK: %[[COL:.*]] = emitpy.call_opaque "pl.reshape"(%[[BIAS]])
+  // CHECK: %[[PRODUCT:.*]] = emitpy.call_opaque "pl.col_expand_mul"(%[[SUM]], %[[COL]])
+  // CHECK-NOT: "pl.tile.full"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[PRODUCT]], %arg2,
 
   // PYPTO-LABEL: func.func @test_col_broadcast_fusion_static(
-  // PYPTO: %[[TILE:.*]] = pypto.load %arg0[{{.*}}] : memref<8x32xf32> -> !npuvector<8x32xf32>
-  // PYPTO: %[[ROW:.*]] = pypto.load %arg1[{{.*}}] : memref<32xf32> -> !npuvector<32xf32>
-  // PYPTO: %[[VEC:.*]] = pypto.reshape %[[ROW]] extents[%c1, %c32] : !npuvector<32xf32> to !npuvector<1x?xf32>
-  // PYPTO: %[[SUM:.*]] = pypto.col_expand_add %[[TILE]], %[[VEC]] : !npuvector<8x32xf32>, !npuvector<1x?xf32> to !npuvector<8x32xf32>
-  // PYPTO: pypto.store %[[SUM]], %arg2[{{.*}}] : !npuvector<8x32xf32>, memref<8x32xf32>
+  // PYPTO: %[[ROW:.*]] = pypto.load %arg1[{{.*}}] : memref<32xf32> -> !pypto.tile<f32, [32]>
+  // PYPTO: %[[BIAS:.*]] = pypto.load %arg3[{{.*}}] : memref<32xf32> -> !pypto.tile<f32, [32]>
+  // PYPTO: pypto.range
+  // PYPTO: %[[TILE:.*]] = pypto.load %arg0[{{.*}}] : memref<8x32xf32> -> !pypto.tile<f32, [8, 32]>
+  // PYPTO: %[[VEC:.*]] = pypto.reshape %[[ROW]] {{.*}} to !pypto.tile<f32, [1, 32]>
+  // PYPTO: %[[SUM:.*]] = pypto.col_expand_add %[[TILE]], %[[VEC]] : !pypto.tile<f32, [8, 32]>, !pypto.tile<f32, [1, 32]> to !pypto.tile<f32, [8, 32]>
+  // PYPTO: %[[COL:.*]] = pypto.reshape %[[BIAS]] {{.*}} to !pypto.tile<f32, [1, 32]>
+  // PYPTO: %[[PRODUCT:.*]] = pypto.col_expand_mul %[[SUM]], %[[COL]] : !pypto.tile<f32, [8, 32]>, !pypto.tile<f32, [1, 32]> to !pypto.tile<f32, [8, 32]>
+  // PYPTO: pypto.store %[[PRODUCT]], %arg2[{{.*}}]
 
   %c0 = arith.constant 0 : index
+  %c8 = arith.constant 8 : index
   %cst = arith.constant 0.0 : f32
-  %tile = npuvector.transfer_read %arg0[%c0, %c0], %cst : memref<8x32xf32>, !npuvector<8x32xf32>
   %row = npuvector.transfer_read %arg1[%c0], %cst : memref<32xf32>, !npuvector<32xf32>
   %bcast = npuvector.broadcast %row : !npuvector<32xf32> to !npuvector<8x32xf32> {dimension = array<i64: 1>}
-  %sum = arith.addf %bcast, %tile : !npuvector<8x32xf32>
-  npuvector.transfer_write %sum, %arg2[%c0, %c0] : !npuvector<8x32xf32>, memref<8x32xf32>
+  %bias = npuvector.transfer_read %arg3[%c0], %cst : memref<32xf32>, !npuvector<32xf32>
+  %row_bcast = npuvector.broadcast %bias : !npuvector<32xf32> to !npuvector<8x32xf32> {dimension = array<i64: 1>}
+  scf.for %i = %c0 to %c8 step %c8 {
+    %tile = npuvector.transfer_read %arg0[%i, %c0], %cst : memref<8x32xf32>, !npuvector<8x32xf32>
+    %sum = arith.addf %bcast, %tile : !npuvector<8x32xf32>
+    %product = arith.mulf %sum, %row_bcast : !npuvector<8x32xf32>
+    npuvector.transfer_write %product, %arg2[%i, %c0] : !npuvector<8x32xf32>, memref<8x32xf32>
+  }
   return
 }
 
@@ -762,9 +771,9 @@ func.func @test_col_broadcast_fusion_dynamic(%arg0 : memref<8x32xf32>, %arg1 : m
   // CHECK: emitpy.call_opaque "pl.store"(%[[SUM]], %arg2)
 
   // PYPTO-LABEL: func.func @test_col_broadcast_fusion_dynamic(
-  // PYPTO: %[[VEC:.*]] = pypto.reshape {{.*}} extents[%c1, %c32_0] : !npuvector<32xf32> to !npuvector<1x?xf32>
-  // PYPTO: %[[SUM:.*]] = pypto.col_expand_sub {{.*}}, %[[VEC]] : !npuvector<?x32xf32>, !npuvector<1x?xf32> to !npuvector<?x32xf32>
-  // PYPTO: pypto.store %[[SUM]], %arg2[{{.*}}] : !npuvector<?x32xf32>, memref<8x32xf32>
+  // PYPTO: %[[VEC:.*]] = pypto.reshape {{.*}} extents[%c1, %c32_0] : !pypto.tile<f32, [32]> to !pypto.tile<f32, [1, 32]>
+  // PYPTO: %[[SUM:.*]] = pypto.col_expand_sub {{.*}}, %[[VEC]] : !pypto.tile<f32, [8, 32]>, !pypto.tile<f32, [1, 32]> to !pypto.tile<f32, [8, 32]>
+  // PYPTO: pypto.store %[[SUM]], %arg2[{{.*}}] : !pypto.tile<f32, [8, 32]>, memref<8x32xf32>
 
   %c0 = arith.constant 0 : index
   %c8 = arith.constant 8 : index
@@ -775,5 +784,159 @@ func.func @test_col_broadcast_fusion_dynamic(%arg0 : memref<8x32xf32>, %arg1 : m
   %bcast = npuvector.broadcast %row[%c8, %c32] [%c8, %c32] : !npuvector<32xf32> to !npuvector<?x32xf32> {dimension = array<i64: 1>}
   %diff = arith.subf %tile, %bcast : !npuvector<?x32xf32>
   npuvector.transfer_write %diff, %arg2[%c0, %c0] : !npuvector<?x32xf32>, memref<8x32xf32>
+  return
+}
+
+// -----
+
+// Padded allocations survive scalar arithmetic, floor, and transpose.
+func.func @test_padded_operations(%arg0 : memref<1x6xf32>, %arg1 : memref<1xf32>, %arg2 : memref<1x6xf32>, %arg3 : memref<8x6xf32>, %arg4 : memref<6x8xf32>) {
+  // PYPTO-LABEL: func.func @test_padded_operations(
+  // PYPTO: %[[LOAD:.*]] = pypto.load %arg0[{{.*}}] padded[{{.*}}] valid[{{.*}}] : memref<1x6xf32> -> !pypto.tile<f32, [1, 8]>
+  // PYPTO: %[[FLAT:.*]] = pypto.reshape %[[LOAD]] {{.*}} : !pypto.tile<f32, [1, 8]> to !pypto.tile<f32, [8]>
+  // PYPTO: %[[DIV:.*]] = pypto.div %[[FLAT]], {{.*}} to !pypto.tile<f32, [8]>
+  // PYPTO: %[[MUL:.*]] = pypto.mul %[[DIV]], {{.*}} to !pypto.tile<f32, [8]>
+  // PYPTO: %[[INT:.*]] = pypto.cast %[[MUL]] {{.*}} : !pypto.tile<f32, [8]> to !pypto.tile<i32, [8]>
+  // PYPTO: %[[FLOOR:.*]] = pypto.cast %[[INT]] : !pypto.tile<i32, [8]> to !pypto.tile<f32, [8]>
+  // PYPTO: %[[ROWS:.*]] = pypto.reshape %[[FLOOR]] {{.*}} valid[{{.*}}] : !pypto.tile<f32, [8]> to !pypto.tile<f32, [1, 8]>
+  // PYPTO: pypto.store %[[ROWS]], %arg2[{{.*}}]
+  // PYPTO: %[[MATRIX:.*]] = pypto.load %arg3[{{.*}}] padded[%c8{{.*}}, %c8{{.*}}] valid[%c8{{.*}}, %c6{{.*}}] : memref<8x6xf32> -> !pypto.tile<f32, [8, 8]>
+  // PYPTO: %[[T:.*]] = pypto.transpose %[[MATRIX]], 0, 1 : !pypto.tile<f32, [8, 8]> to !pypto.tile<f32, [8, 8]>
+  // PYPTO: pypto.store %[[T]], %arg4[{{.*}}] : !pypto.tile<f32, [8, 8]>, memref<6x8xf32>
+  // CHECK-LABEL: func.func @test_padded_operations(
+  // CHECK: %[[INT:.*]] = emitpy.call_opaque "pl.cast"{{.*}} -> !emitpy.opaque<"pl.Tile{{\[\[8\], pl\.INT32\]}}">
+  // CHECK: emitpy.call_opaque "pl.cast"(%[[INT]]) {{.*}} -> !emitpy.opaque<"pl.Tile{{\[\[8\], pl\.FP32\]}}">
+  // CHECK: %[[VALID:.*]] = emitpy.call_opaque "pl.slice"{{.*}}#emitpy.opaque<"[1, 6]">
+  // CHECK: emitpy.call_opaque "pl.store"(%[[VALID]], %arg2)
+  // CHECK: %[[T:.*]] = emitpy.call_opaque "pl.transpose"{{.*}} -> !emitpy.opaque<"pl.Tile{{\[\[8, 8\], pl\.FP32\]}}">
+  // CHECK: emitpy.call_opaque "pl.store"(%[[T]], %arg4)
+
+  %c0 = arith.constant 0 : index
+  %c8 = arith.constant 8 : index
+  %c6 = arith.constant 6 : index
+  %zero = arith.constant 0.0 : f32
+  %factor = arith.constant 1.5 : f32
+  %den = npuvector.transfer_read %arg1[%c0], %zero : memref<1xf32>, !npuvector.f32
+  %den_tile = npuvector.broadcast %den[%c6] [%c6] : !npuvector.f32 to !npuvector<6xf32>
+  %factor_tile = npuvector.broadcast %factor[%c6] [%c6] : f32 to !npuvector<6xf32>
+  %tile = npuvector.transfer_read %arg0[%c0, %c0] [%c6] [%c6], %zero : memref<1x6xf32>, !npuvector<6xf32>
+  %ratio = arith.divf %tile, %den_tile : !npuvector<6xf32>
+  %weighted = arith.mulf %ratio, %factor_tile : !npuvector<6xf32>
+  %floored = math.floor %weighted : !npuvector<6xf32>
+  npuvector.transfer_write %floored, %arg2[%c0, %c0] : !npuvector<6xf32>, memref<1x6xf32>
+  %matrix = npuvector.transfer_read %arg3[%c0, %c0] [%c8, %c6] [%c8, %c6], %zero : memref<8x6xf32>, !npuvector<8x6xf32>
+  %transposed = npuvector.transpose %matrix, [1, 0] : !npuvector<8x6xf32> to !npuvector<6x8xf32>
+  npuvector.transfer_write %transposed, %arg4[%c0, %c0] : !npuvector<6x8xf32>, memref<6x8xf32>
+  return
+}
+
+// -----
+
+// Selects retain consumer-driven allocations and column-broadcast valid regions.
+func.func @test_mapped_cmp_select(%arg0 : memref<10xi64>, %arg1 : memref<10xi8>, %arg2 : memref<10xi64>, %arg3 : memref<32xf32>, %arg4 : memref<2x32xf32>, %arg5 : memref<2x32xf32>) {
+  // PYPTO-LABEL: func.func @test_mapped_cmp_select(
+  // PYPTO: %[[DIFF:.*]] = pypto.sub {{.*}} to !pypto.tile<i32, [32]>
+  // PYPTO: %[[MASK:.*]] = pypto.cmp lt, %[[DIFF]], {{.*}} -> !pypto.tile<i1, [32]>
+  // PYPTO: %[[SELECTED:.*]] = pypto.select %[[MASK]], {{.*}}, %[[DIFF]] : !pypto.tile<i1, [32]>, i32, !pypto.tile<i32, [32]> to !pypto.tile<i32, [32]>
+  // PYPTO: %[[WIDE:.*]] = pypto.cast %[[SELECTED]] : !pypto.tile<i32, [32]> to !pypto.tile<i64, [32]>
+  // PYPTO: pypto.reshape %[[WIDE]] {{.*}} valid[%c1{{.*}}, %c10{{.*}}] : !pypto.tile<i64, [32]> to !pypto.tile<i64, [1, 32]>
+  // PYPTO: %[[DATA:.*]] = pypto.load %arg4[{{.*}}] : memref<2x32xf32> -> !pypto.tile<f32, [2, 32]>
+  // PYPTO: %[[CARRIER:.*]] = pypto.reshape {{.*}} valid[%c2{{.*}}, %c32{{.*}}] : !pypto.tile<f32, [2, 32]> to !pypto.tile<f32, [2, 32]>
+  // PYPTO: %[[LIFTED:.*]] = pypto.col_expand_add %[[CARRIER]], {{.*}} to !pypto.tile<f32, [2, 32]>
+  // PYPTO: %[[COLUMN_MASK:.*]] = pypto.cmp {{ *}}eq, %[[LIFTED]], {{.*}} -> !pypto.tile<i1, [2, 32]>
+  // PYPTO: %[[COLUMN_SELECT:.*]] = pypto.select %[[COLUMN_MASK]], {{.*}}, %[[DATA]] : !pypto.tile<i1, [2, 32]>, f32, !pypto.tile<f32, [2, 32]> to !pypto.tile<f32, [2, 32]>
+  // PYPTO: pypto.store %[[COLUMN_SELECT]], %arg5[{{.*}}]
+  // CHECK-LABEL: func.func @test_mapped_cmp_select(
+  // CHECK: %[[OUT:.*]] = emitpy.call_opaque "pl.reshape"(%arg2)
+  // CHECK: emitpy.call_opaque "pl.cast"{{.*}} -> !emitpy.opaque<"pl.Tile{{\[\[32\], pl\.INT64\]}}">
+  // CHECK: %[[VALID:.*]] = emitpy.call_opaque "pl.slice"{{.*}}#emitpy.opaque<"[1, 10]">
+  // CHECK: emitpy.call_opaque "pl.store"(%[[VALID]], %[[OUT]])
+  // CHECK: %[[COLUMN_SELECT:.*]] = emitpy.call_opaque "pl.tile.select"{{.*}} -> !emitpy.opaque<"pl.Tile{{\[\[2, 32\], pl\.FP32\]}}">
+  // CHECK: emitpy.call_opaque "pl.store"(%[[COLUMN_SELECT]], %arg5)
+
+  %c0 = arith.constant 0 : index
+  %c2 = arith.constant 2 : index
+  %c10 = arith.constant 10 : index
+  %c32 = arith.constant 32 : index
+  %zero_i64 = arith.constant 0 : i64
+  %zero_i32 = arith.constant 0 : i32
+  %one_i32 = arith.constant 1 : i32
+  %zero_f32 = arith.constant 0.0 : f32
+  %input = npuvector.transfer_read %arg0[%c0] [%c10] [%c10], %zero_i64 : memref<10xi64>, !npuvector<10xi64>
+  %narrow = npuvector.trunci %input : !npuvector<10xi64> to !npuvector<10xi32>
+  %zero = npuvector.broadcast %zero_i32[%c10] [%c10] : i32 to !npuvector<10xi32>
+  %one = npuvector.broadcast %one_i32[%c10] [%c10] : i32 to !npuvector<10xi32>
+  %negative = npuvector.cmpi slt, %narrow, %zero : !npuvector<10xi32> to !npuvector<10xi1>
+  %float = npuvector.uitofp %negative : !npuvector<10xi1> to !npuvector<10xf16>
+  %byte = npuvector.fptoui %float : !npuvector<10xf16> to !npuvector<10xi8>
+  npuvector.transfer_write %byte, %arg1[%c0] : !npuvector<10xi8>, memref<10xi8>
+  %diff = arith.subi %narrow, %one : !npuvector<10xi32>
+  %below = npuvector.cmpi slt, %diff, %zero : !npuvector<10xi32> to !npuvector<10xi1>
+  %clamped = npuvector.select %below, %zero, %diff : !npuvector<10xi1>, !npuvector<10xi32>
+  %wide = npuvector.extsi %clamped : !npuvector<10xi32> to !npuvector<10xi64>
+  npuvector.transfer_write %wide, %arg2[%c0] : !npuvector<10xi64>, memref<10xi64>
+  %bias = npuvector.transfer_read %arg3[%c0] [%c32] [%c32], %zero_f32 : memref<32xf32>, !npuvector<32xf32>
+  %zero_rows = npuvector.broadcast %zero_f32[%c32] [%c32] : f32 to !npuvector<32xf32>
+  %condition = npuvector.cmpf oeq, %bias, %zero_rows : !npuvector<32xf32> to !npuvector<32xi1>
+  %data = npuvector.transfer_read %arg4[%c0, %c0] [%c2, %c32] [%c2, %c32], %zero_f32 : memref<2x32xf32>, !npuvector<2x32xf32>
+  %row_mask = npuvector.broadcast %condition[%c2, %c32] [%c2, %c32] : !npuvector<32xi1> to !npuvector<2x32xi1> {dimension = array<i64: 1>}
+  %zero_data = npuvector.broadcast %zero_f32[%c2, %c32] [%c2, %c32] : f32 to !npuvector<2x32xf32>
+  %selected = npuvector.select %row_mask, %zero_data, %data : !npuvector<2x32xi1>, !npuvector<2x32xf32>
+  npuvector.transfer_write %selected, %arg5[%c0, %c0] : !npuvector<2x32xf32>, memref<2x32xf32>
+  return
+}
+
+// -----
+
+// Broadcast mask unpacking propagates alignment and preserves legacy allocations.
+func.func @test_padded_cmp_narrow_cast(%arg0 : memref<1x6xf32>, %arg1 : memref<1x6xi32>, %arg2 : memref<2x6xi8>, %arg3 : memref<2x8xf32>, %arg4 : memref<2x8xi8>) {
+  // PYPTO-LABEL: func.func @test_padded_cmp_narrow_cast(
+  // PYPTO: %[[LOAD:.*]] = pypto.load %arg0[{{.*}}] padded[%c1{{.*}}, %c32{{.*}}] valid[%c1{{.*}}, %c6{{.*}}] : memref<1x6xf32> -> !pypto.tile<f32, [1, 32]>
+  // PYPTO: %[[INT:.*]] = pypto.select {{.*}} to !pypto.tile<i32, [32]>
+  // The extension to i32 folds into the unpacking select.
+  // PYPTO: %[[ROWS:.*]] = pypto.reshape %[[INT]] {{.*}} valid[%c1{{.*}}, %c6{{.*}}] : !pypto.tile<i32, [32]> to !pypto.tile<i32, [1, 32]>
+  // PYPTO: pypto.store %[[ROWS]], %arg1[{{.*}}]
+  // PYPTO: %[[MASK:.*]] = pypto.cmp lt, {{.*}} -> !pypto.tile<i1, [2, 32]>
+  // PYPTO: %[[ONE:.*]] = pypto.tile_full "1" : !pypto.tile<i32, [2, 32]>
+  // PYPTO: %[[ONES:.*]] = pypto.reshape %[[ONE]] {{.*}} valid[%c2{{.*}}, %c6{{.*}}] : !pypto.tile<i32, [2, 32]> to !pypto.tile<i32, [2, 32]>
+  // PYPTO: %[[ZERO:.*]] = pypto.tile_full "0" : !pypto.tile<i32, [2, 32]>
+  // PYPTO: %[[ZEROS:.*]] = pypto.reshape %[[ZERO]] {{.*}} valid[%c2{{.*}}, %c6{{.*}}] : !pypto.tile<i32, [2, 32]> to !pypto.tile<i32, [2, 32]>
+  // PYPTO: %[[UNPACK:.*]] = pypto.select %[[MASK]], %[[ONES]], %[[ZEROS]] : !pypto.tile<i1, [2, 32]>, !pypto.tile<i32, [2, 32]>, !pypto.tile<i32, [2, 32]> to !pypto.tile<i32, [2, 32]>
+  // PYPTO: %[[HALF:.*]] = pypto.cast %[[UNPACK]] : !pypto.tile<i32, [2, 32]> to !pypto.tile<f16, [2, 32]>
+  // PYPTO: %[[BYTE:.*]] = pypto.cast %[[HALF]] : !pypto.tile<f16, [2, 32]> to !pypto.tile<i8, [2, 32]>
+  // PYPTO: pypto.store %[[BYTE]], %arg2[{{.*}}]
+  // PYPTO: %[[LEGACY_ONE:.*]] = pypto.tile_full "1" extents[{{.*}}] : vector<2x8xi32>
+  // PYPTO: %[[LEGACY_ONES:.*]] = pypto.reshape %[[LEGACY_ONE]] {{.*}} valid[{{.*}}] : vector<2x8xi32> to vector<2x8xi32>
+  // PYPTO: %[[LEGACY_ZERO:.*]] = pypto.tile_full "0" extents[{{.*}}] : vector<2x8xi32>
+  // PYPTO: %[[LEGACY_ZEROS:.*]] = pypto.reshape %[[LEGACY_ZERO]] {{.*}} valid[{{.*}}] : vector<2x8xi32> to vector<2x8xi32>
+  // PYPTO: pypto.select {{.*}}, %[[LEGACY_ONES]], %[[LEGACY_ZEROS]] : vector<2x8xi1>, vector<2x8xi32>, vector<2x8xi32> to vector<2x8xi32>
+  // CHECK-LABEL: func.func @test_padded_cmp_narrow_cast(
+  // CHECK: emitpy.call_opaque "pl.slice"{{.*}}#emitpy.opaque<"[2, 6]">{{.*}} -> !emitpy.opaque<"pl.Tile{{\[\[2, 32\], pl\.INT32\]}}">
+  // CHECK: emitpy.call_opaque "pl.store"({{.*}}, %arg2)
+  // CHECK: emitpy.call_opaque "pl.tile.full"() {args = [#emitpy.opaque<"[2, 32]">, #emitpy.opaque<"pl.INT32">, #emitpy.opaque<"1">]
+  // CHECK: emitpy.call_opaque "pl.slice"{{.*}}#emitpy.opaque<"[2, 8]">{{.*}} -> vector<2x8xi32>
+  // CHECK: emitpy.call_opaque "pl.tile.full"() {args = [#emitpy.opaque<"[2, 32]">, #emitpy.opaque<"pl.INT32">, #emitpy.opaque<"0">]
+  // CHECK: emitpy.call_opaque "pl.slice"{{.*}}#emitpy.opaque<"[2, 8]">{{.*}} -> vector<2x8xi32>
+  // CHECK: emitpy.call_opaque "pl.store"({{.*}}, %arg4)
+
+  %c0 = arith.constant 0 : index
+  %c2 = arith.constant 2 : index
+  %c6 = arith.constant 6 : index
+  %zero = arith.constant 0.0 : f32
+  %value = npuvector.transfer_read %arg0[%c0, %c0] [%c6] [%c6], %zero : memref<1x6xf32>, !npuvector<6xf32>
+  %broadcast = npuvector.broadcast %zero[%c6] [%c6] : f32 to !npuvector<6xf32>
+  %cmp = npuvector.cmpf olt, %value, %broadcast : !npuvector<6xf32> to !npuvector<6xi1>
+  %int = npuvector.extui %cmp : !npuvector<6xi1> to !npuvector<6xi32>
+  npuvector.transfer_write %int, %arg1[%c0, %c0] : !npuvector<6xi32>, memref<1x6xi32>
+  %expanded = npuvector.broadcast %cmp[%c2, %c6] [%c2, %c6] : !npuvector<6xi1> to !npuvector<2x6xi1> {dimension = array<i64: 1>}
+  %float = npuvector.uitofp %expanded : !npuvector<2x6xi1> to !npuvector<2x6xf16>
+  %byte = npuvector.fptoui %float : !npuvector<2x6xf16> to !npuvector<2x6xi8>
+  npuvector.transfer_write %byte, %arg2[%c0, %c0] : !npuvector<2x6xi8>, memref<2x6xi8>
+  %legacy_value = vector.transfer_read %arg3[%c0, %c0], %zero : memref<2x8xf32>, vector<2x8xf32>
+  %legacy_broadcast = vector.broadcast %zero : f32 to vector<2x8xf32>
+  %legacy_cmp = arith.cmpf olt, %legacy_value, %legacy_broadcast : vector<2x8xf32>
+  %legacy_float = arith.uitofp %legacy_cmp : vector<2x8xi1> to vector<2x8xf16>
+  %legacy_byte = arith.fptoui %legacy_float : vector<2x8xf16> to vector<2x8xi8>
+  vector.transfer_write %legacy_byte, %arg4[%c0, %c0] : vector<2x8xi8>, memref<2x8xi8>
   return
 }

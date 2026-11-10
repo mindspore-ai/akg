@@ -26,7 +26,7 @@ include "mlir/IR/BuiltinTypes.td"
 // Pypto_TileType
 //===----------------------------------------------------------------------===//
 
-def Pypto_TileType : TypeDef<Pypto_Dialect, "Tile"> {
+def Pypto_TileType : TypeDef<Pypto_Dialect, "Tile", [ShapedTypeInterface]> {
   let mnemonic = "tile";
   let summary = "A tile of elements resident in core-local PyPTO memory";
   let description = [{
@@ -35,6 +35,9 @@ def Pypto_TileType : TypeDef<Pypto_Dialect, "Tile"> {
     shape explicitly, so the tile-model invariants (shape known to the PyPTO
     runtime, element type mappable to a PyPTO dtype) are checked by the IR
     verifier instead of by stringly-typed conventions downstream.
+
+    Allocation operations check physical buffer alignment. Views and
+    logical comparison masks do not impose alignment on the tile type.
 
     Syntax:
 
@@ -73,6 +76,22 @@ def Pypto_TileType : TypeDef<Pypto_Dialect, "Tile"> {
     /// tile. Tiles consist of integer, index, or float primitives.
     static bool isValidElementType(Type t) {
       return ::llvm::isa<IntegerType, IndexType, FloatType>(t);
+    }
+
+    /// Tiles always have a known rank, including rank-zero scalar tiles.
+    bool hasRank() const { return true; }
+
+    /// Clone this tile with the given shape and element type. A missing
+    /// shape preserves the current shape.
+    TileType cloneWith(std::optional<ArrayRef<int64_t>> shape,
+                       Type elementType) const;
+
+    TileType clone(ArrayRef<int64_t> shape, Type elementType) const {
+      return cloneWith(shape, elementType);
+    }
+
+    TileType clone(ArrayRef<int64_t> shape) const {
+      return cloneWith(shape, getElementType());
     }
 
     /// Returns the rank of this tile.

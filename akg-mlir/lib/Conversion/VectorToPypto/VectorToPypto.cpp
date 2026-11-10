@@ -33,6 +33,7 @@
 #include "akg/Dialect/Pypto/IR/PyptoOps.h"
 #include "akg/Dialect/Pypto/IR/PyptoTypes.h"
 
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
@@ -105,18 +106,48 @@ static std::optional<std::string> pyptoDtypeName(Type type) {
   return std::nullopt;
 }
 
-/// The type converter is deliberately the identity: the conversion
-/// framework would otherwise materialize unrealized_conversion_cast ops for
-/// every operand whose type maps to something else, and a full conversion
-/// rejects those. Values inside the kernel keep their source types; only the
-/// function signature is rewritten by hand, into opaque PyPTO annotation
-/// types, by the downstream convert-pypto-to-emitpy pass.
+/// Function parameters have no per-operation padded shape. Operation patterns
+/// compute their physical Tile types from the source operation and use the
+/// conversion adaptor without a type-only mapping.
 class VectorToPyptoTypeConverter : public TypeConverter {
  public:
   explicit VectorToPyptoTypeConverter(MLIRContext *ctx) {
     addConversion([](Type type) { return type; });
+    addConversion([](npuvector::NPUVectorType type) -> Type {
+      return pypto::TileType::get(type.getContext(), type.getElementType(), type.getShape());
+    });
   }
 };
+
+/// Preserve Tensor views and standard vectors; NPU tiles are represented by
+/// the target dialect from the moment their defining operation is created.
+static Type pyptoType(Type type) {
+  if (auto vector = dyn_cast<npuvector::NPUVectorType>(type)) {
+    return pypto::TileType::get(type.getContext(), vector.getElementType(), vector.getShape());
+  }
+  return type;
+}
+
+static Type pyptoType(Type type, ArrayRef<int64_t> shape) {
+  if (isa<npuvector::NPUVectorType, pypto::TileType>(type)) {
+    return pypto::TileType::get(type.getContext(), getElementTypeOrSelf(type), shape);
+  }
+  return type;
+}
+
+static Value mapped(ConversionPatternRewriter &rewriter, Value value) { return rewriter.getRemappedValue(value); }
+
+static SmallVector<Value> mapped(ConversionPatternRewriter &rewriter, ValueRange values) {
+  SmallVector<Value> result;
+  std::transform(values.begin(), values.end(), std::back_inserter(result),
+                 [&](Value value) { return mapped(rewriter, value); });
+  return result;
+}
+
+static Type pyptoExtentType(Type source, ValueRange extents);
+static Type pyptoLoadType(Type source, Value tensor, ValueRange extents);
+static Type pyptoResultType(Value source);
+static SmallVector<Type> pyptoResultTypes(Operation *source, ValueRange operands = {});
 
 //===----------------------------------------------------------------------===//
 // Python text helpers
@@ -229,12 +260,10 @@ static void replaceWithSliceOp(Operation *op, Value source, Value result, ArrayR
   if (!droppedDims.empty()) {
     dropDimsAttr = rewriter.getDenseI64ArrayAttr(llvm::to_vector_of<int64_t>(droppedDims));
   }
-  // The replacement keeps the original result type: the type converter is
-  // the identity, so a type-changing replacement would demand a
-  // materialization at already-converted users and abort the full
-  // conversion.
-  rewriter.replaceOpWithNewOp<pypto::SliceOp>(op, result.getType(), source, window, ValueRange(offsetValues),
-                                              dropDimsAttr);
+  // Tensor views retain their memref type; tile slices construct a target
+  // Tile type while their original logical shape is still available.
+  rewriter.replaceOpWithNewOp<pypto::SliceOp>(op, pyptoType(result.getType()), mapped(rewriter, source), window,
+                                              mapped(rewriter, ValueRange(offsetValues)), dropDimsAttr);
 }
 
 /// Creates a scratch tile (`pypto.create_tile`); convert-pypto-to-emitpy
@@ -399,6 +428,32 @@ static std::optional<unsigned> castResultElemBytes(Operation *op) {
   return bytes ? std::optional<unsigned>(bytes) : std::nullopt;
 }
 
+/// A broadcast preserves row-alignment requirements when its source's
+/// contiguous axis remains the result's contiguous axis without expanding
+/// that logical dimension. Other broadcast axes do not constrain the source.
+static bool broadcastPreservesContiguousAxis(Value source, Operation *user) {
+  if (!isa<npuvector::BroadcastOp, vector::BroadcastOp>(user)) {
+    return false;
+  }
+  auto sourceType = dyn_cast<ShapedType>(source.getType());
+  auto resultType = dyn_cast<ShapedType>(user->getResult(0).getType());
+  if (!sourceType || !resultType || sourceType.getRank() == 0 || resultType.getRank() == 0) {
+    return false;
+  }
+  int64_t sourceLast = sourceType.getShape().back();
+  int64_t resultLast = resultType.getShape().back();
+  // Two dynamic dimensions do not prove equal runtime valid extents.
+  if (ShapedType::isDynamic(sourceLast) || ShapedType::isDynamic(resultLast) || sourceLast != resultLast) {
+    return false;
+  }
+  if (auto broadcast = dyn_cast<npuvector::BroadcastOp>(user)) {
+    ArrayRef<int64_t> dims = broadcast.getDimension();
+    return dims.size() == sourceType.getRank() && dims.back() == static_cast<int64_t>(resultType.getRank() - 1);
+  }
+  // vector.broadcast aligns its source axes with the trailing result axes.
+  return true;
+}
+
 /// Forward walk from a tile value collecting the narrowest result dtype
 /// width a cast chain downstream of it produces, or nullopt when no cast
 /// consumes the chain. A cast keeps the source tile's allocation while
@@ -424,7 +479,7 @@ static void collectCastChainMinElemBytesImpl(Value v, unsigned depth, std::optio
         minBytes = bytes;
       }
     }
-    if (keepsOperandAllocation(user)) {
+    if (keepsOperandAllocation(user) || broadcastPreservesContiguousAxis(v, user)) {
       for (Value result : user->getResults()) {
         collectCastChainMinElemBytesImpl(result, depth + 1, minBytes, visited);
       }
@@ -437,6 +492,23 @@ static std::optional<unsigned> castChainMinElemBytes(Value v) {
   DenseSet<Value> visited;
   collectCastChainMinElemBytesImpl(v, 0, minBytes, visited);
   return minBytes;
+}
+
+/// Map a cast's row-alignment requirement across a broadcast's preserved
+/// contiguous axis. In particular, a comparison broadcast before an INT8
+/// cast must pad the compared data before constructing the packed mask.
+static std::optional<ReductionAxisPad> broadcastCastAxisPad(Value source, Operation *user) {
+  if (!broadcastPreservesContiguousAxis(source, user)) {
+    return std::nullopt;
+  }
+  auto minBytes = castChainMinElemBytes(user->getResult(0));
+  if (!minBytes) {
+    return std::nullopt;
+  }
+  ReductionAxisPad pad;
+  pad.axes.push_back(cast<ShapedType>(source.getType()).getRank() - 1);
+  pad.resultElemBytes = *minBytes;
+  return pad;
 }
 
 /// Collects the pad an unconverted partial reduction's output tile
@@ -553,6 +625,9 @@ static void collectReductionAxisPadsImpl(Value v, unsigned depth, SmallVectorImp
         pad.resultElemBytes = *castBytes;
         pads.push_back(std::move(pad));
       }
+    }
+    if (auto pad = broadcastCastAxisPad(v, user)) {
+      pads.push_back(std::move(*pad));
     }
     if (keepsOperandAllocation(user)) {
       for (Value result : user->getResults()) {
@@ -922,6 +997,30 @@ static std::optional<SmallVector<int64_t>> npuReductionAllocationShape(Value v, 
   return kept;
 }
 
+static std::optional<SmallVector<int64_t>> blockArgumentAllocationShape(BlockArgument arg, unsigned depth) {
+  if (auto loop = dyn_cast_or_null<scf::ForOp>(arg.getOwner()->getParentOp()); loop && arg.getArgNumber() > 0) {
+    return tileAllocationShape(loop.getInitArgs()[arg.getArgNumber() - 1], depth + 1);
+  }
+  return std::nullopt;
+}
+
+static std::optional<SmallVector<int64_t>> npuReadAllocationShape(Value value, npuvector::TransferReadOp read,
+                                                                  unsigned depth) {
+  auto bounds = alignAllocationBounds(value, value.getType(), read.getMaxSizes());
+  auto shaped = cast<ShapedType>(value.getType());
+  if (!bounds && shaped.hasStaticShape()) {
+    unsigned elemBytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
+    SmallVector<ReductionAxisPad> pads;
+    collectReductionAxisPads(value, 0, pads);
+    SmallVector<int64_t> shape;
+    for (auto [axis, extent] : llvm::enumerate(shaped.getShape())) {
+      shape.push_back(padAllocationExtent(extent, axis, shaped.getRank(), elemBytes, pads));
+    }
+    bounds = std::move(shape);
+  }
+  return mergeSiblingAllocationBounds(value, depth, bounds);
+}
+
 /// The statically allocatable shape covering a tile: static dims stay and
 /// dynamic (`?`) dims resolve to the producing read/broadcast's `maxSizes`
 /// bound, padded to whole 32-byte rows the way the allocation will be.
@@ -938,22 +1037,30 @@ static std::optional<SmallVector<int64_t>> tileAllocationShape(Value v, unsigned
   if (depth > 64) {
     return std::nullopt;
   }
+  if (auto tile = dyn_cast<pypto::TileType>(v.getType());
+      tile && llvm::none_of(tile.getShape(), ShapedType::isDynamic)) {
+    return SmallVector<int64_t>(tile.getShape());
+  }
   // Loop-carried tiles: an scf.for result keeps the allocation of the
   // yielded value, and an iter_arg keeps the init's.
   if (auto arg = dyn_cast<BlockArgument>(v)) {
-    if (auto loop = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
-      if (arg.getArgNumber() > 0) {
-        return tileAllocationShape(loop.getInitArgs()[arg.getArgNumber() - 1], depth + 1);
-      }
-    }
-    return std::nullopt;
+    return blockArgumentAllocationShape(arg, depth);
   }
   Operation *def = v.getDefiningOp();
   if (!def) {
     return std::nullopt;
   }
   if (auto read = dyn_cast<npuvector::TransferReadOp>(def)) {
-    return mergeSiblingAllocationBounds(v, depth, alignAllocationBounds(v, v.getType(), read.getMaxSizes()));
+    return npuReadAllocationShape(v, read, depth);
+  }
+  if (auto transpose = dyn_cast<npuvector::TransposeOp>(def)) {
+    if (auto bounds = tileAllocationShape(transpose.getVector(), depth + 1)) {
+      SmallVector<int64_t> shape;
+      auto permutation = transpose.getPermutation();
+      std::transform(permutation.begin(), permutation.end(), std::back_inserter(shape),
+                     [&](int64_t axis) { return (*bounds)[axis]; });
+      return shape;
+    }
   }
   if (auto load = dyn_cast<pypto::LoadOp>(def)) {
     return loadAllocationShape(v, load, depth);
@@ -997,25 +1104,75 @@ static std::optional<SmallVector<int64_t>> tileAllocationShape(Value v, unsigned
   return std::nullopt;
 }
 
+/// Query the source dataflow while it still carries logical valid shapes.
+/// The result type is constructed once, when its target operation is built.
+static Type pyptoResultType(Value source) {
+  Type type = source.getType();
+  if (!isa<npuvector::NPUVectorType>(type)) {
+    return type;
+  }
+  if (auto shape = tileAllocationShape(source)) {
+    return pyptoType(type, *shape);
+  }
+  return pyptoType(type);
+}
+
+static SmallVector<Type> pyptoResultTypes(Operation *source, ValueRange operands) {
+  SmallVector<Type> result;
+  for (Value value : source->getResults()) {
+    Type type = pyptoResultType(value);
+    if (isa<npuvector::NPUVectorType>(value.getType())) {
+      for (Value operand : operands) {
+        if (auto tile = dyn_cast<pypto::TileType>(operand.getType())) {
+          type = pyptoType(value.getType(), tile.getShape());
+          break;
+        }
+      }
+    }
+    result.push_back(type);
+  }
+  return result;
+}
+
+static Type pyptoExtentType(Type source, ValueRange extents) {
+  if (!isa<npuvector::NPUVectorType, pypto::TileType>(source) || extents.empty()) {
+    return pyptoType(source);
+  }
+  SmallVector<int64_t> shape;
+  std::transform(extents.begin(), extents.end(), std::back_inserter(shape),
+                 [](Value extent) { return constIndexValue(extent).value_or(ShapedType::kDynamic); });
+  return pyptoType(source, shape);
+}
+
+static Type pyptoLoadType(Type source, Value tensor, ValueRange extents) {
+  Type result = pyptoExtentType(source, extents);
+  if (extents.empty()) {
+    if (auto tile = dyn_cast<pypto::TileType>(result)) {
+      if (auto input = dyn_cast<ShapedType>(tensor.getType()); input && input.getRank() > tile.getRank()) {
+        SmallVector<int64_t> shape(tile.getShape());
+        shape.insert(shape.begin(), input.getRank() - shape.size(), 1);
+        return pyptoType(result, shape);
+      }
+    }
+  }
+  return result;
+}
+
 /// Views `input` as a `[rows, cols]` tile (`pypto.reshape`);
 /// convert-pypto-to-emitpy lowers it into `pl.reshape(input, [rows, cols])`.
 static Value reshapeTileOp(ConversionPatternRewriter &rewriter, Location loc, Value input, int64_t rows, int64_t cols,
                            Type elemType) {
   assert(pyptoDtypeName(elemType) && "caller validated the element type");
   return rewriter.create<pypto::ReshapeOp>(
-    loc, pypto::TileType::get(rewriter.getContext(), elemType, SmallVector<int64_t>{rows, cols}), input, ValueRange(),
-    ValueRange());
+    loc,
+    pyptoExtentType(pypto::TileType::get(rewriter.getContext(), elemType, SmallVector<int64_t>{rows, cols}),
+                    ValueRange()),
+    mapped(rewriter, input), ValueRange(), ValueRange());
 }
 
-/// Views `input` as a `[rows, cols]` tile whose *valid* region is only
-/// `[validRows, validCols]`. The value's own type spells the valid extent,
-/// while the tile allocates wider (32-byte-aligned rows), so a static
-/// result type trips both the IR verifier's element-count check and
-/// `pl.reshape`'s allocated-element conservation. The dynamic result type
-/// keeps the verifier's static check off; the extents spell the physical
-/// allocation and the valid extents spell the valid region, which the
-/// emitpy lowering turns into reshape+slice so the store writes only the
-/// valid elements.
+/// Views the physical allocation as `[rows, cols]` while carrying the
+/// smaller valid region separately. The Tile type preserves the physical
+/// element count; valid extents lower to a slice that bounds the store.
 static Value reshapeTileWithValidOp(ConversionPatternRewriter &rewriter, Location loc, Value input, int64_t rows,
                                     int64_t cols, int64_t validRows, int64_t validCols, Type elemType) {
   assert(pyptoDtypeName(elemType) && "caller validated the element type");
@@ -1025,22 +1182,22 @@ static Value reshapeTileWithValidOp(ConversionPatternRewriter &rewriter, Locatio
                                   rewriter.create<arith::ConstantIndexOp>(loc, validCols)};
   return rewriter.create<pypto::ReshapeOp>(
     loc,
-    pypto::TileType::get(rewriter.getContext(), elemType,
-                         SmallVector<int64_t>{ShapedType::kDynamic, ShapedType::kDynamic}),
-    input, ValueRange(extents), ValueRange(validExtents));
+    pyptoExtentType(pypto::TileType::get(rewriter.getContext(), elemType, SmallVector<int64_t>{rows, cols}),
+                    ValueRange(extents)),
+    mapped(rewriter, input), mapped(rewriter, ValueRange(extents)), mapped(rewriter, ValueRange(validExtents)));
 }
 
 //===----------------------------------------------------------------------===//
 // Conversion patterns
 //===----------------------------------------------------------------------===//
 
+static bool fuseScalarBroadcastConsumer(Operation *op, ValueRange operands, ConversionPatternRewriter &rewriter);
+static bool fuseTileBroadcastConsumer(Operation *op, ValueRange operands, ConversionPatternRewriter &rewriter);
+
 /// Rewrites an operation into the matching pypto op, e.g.
 /// `arith.addf %a, %b` -> `pypto.add %a, %b`.
-/// The raw (non-adaptor) operands are used on purpose: values already
-/// rewritten point at their replacements, and anything else keeps its
-/// source type so the converter never materializes casts. During the
-/// gradual migration the pypto op keeps the source op's result type;
-/// convert-pypto-to-emitpy lowers it into the `pl.*` call_opaque form.
+/// The adaptor supplies the converted data tiles. Their physical shape and
+/// the source result's element type determine the target type at creation.
 /// Scalar operands keep the arith op: pypto is a tile dialect, and scalar
 /// arithmetic rides through to stage two, which maps it onto infix
 /// pseudo-callees named after the arith ops.
@@ -1051,11 +1208,18 @@ class OpToPyptoOpPattern : public OpConversionPattern<SourceOp> {
 
   LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    if (llvm::none_of(op->getOperands(),
-                      [](Value operand) { return isa<VectorType, npuvector::NPUVectorType>(operand.getType()); })) {
+    if (llvm::none_of(op->getOperands(), [](Value operand) {
+          return isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(operand.getType());
+        })) {
       return rewriter.notifyMatchFailure(op, "scalar arithmetic stays arith");
     }
-    rewriter.replaceOpWithNewOp<PyptoOp>(op, op->getResultTypes(), op->getOperands());
+    if (fuseScalarBroadcastConsumer(op, adaptor.getOperands(), rewriter)) {
+      return success();
+    }
+    if (fuseTileBroadcastConsumer(op, adaptor.getOperands(), rewriter)) {
+      return success();
+    }
+    rewriter.replaceOpWithNewOp<PyptoOp>(op, pyptoResultTypes(op, adaptor.getOperands()), adaptor.getOperands());
     return success();
   }
 };
@@ -1071,10 +1235,10 @@ class MinMaxToPyptoPattern : public OpConversionPattern<SourceOp> {
 
   LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    if (isa<VectorType, npuvector::NPUVectorType>(op.getLhs().getType())) {
-      rewriter.replaceOpWithNewOp<TileOp>(op, op->getResultTypes(), op->getOperands());
+    if (isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(op.getLhs().getType())) {
+      rewriter.replaceOpWithNewOp<TileOp>(op, pyptoResultTypes(op, adaptor.getOperands()), adaptor.getOperands());
     } else {
-      rewriter.replaceOpWithNewOp<ScalarOp>(op, op->getResultTypes(), op->getOperands());
+      rewriter.replaceOpWithNewOp<ScalarOp>(op, pyptoResultTypes(op, adaptor.getOperands()), adaptor.getOperands());
     }
     return success();
   }
@@ -1091,10 +1255,10 @@ class TileRemToPyptoPattern : public OpConversionPattern<SourceOp> {
 
   LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    if (!isa<VectorType, npuvector::NPUVectorType>(op.getLhs().getType())) {
+    if (!isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(op.getLhs().getType())) {
       return rewriter.notifyMatchFailure(op, "scalar remainder waits for stage two");
     }
-    rewriter.replaceOpWithNewOp<pypto::FmodOp>(op, op->getResultTypes(), op->getOperands());
+    rewriter.replaceOpWithNewOp<pypto::FmodOp>(op, pyptoResultTypes(op, adaptor.getOperands()), adaptor.getOperands());
     return success();
   }
 };
@@ -1150,6 +1314,89 @@ static std::optional<unsigned> cmpTypeCodeFor(arith::CmpFPredicate predicate) {
   }
 }
 
+/// Select conditions and broadcasts consume or relay the packed mask.
+static bool keepsPackedMask(OpOperand &use) {
+  // A broadcast relays the comparison mask to the select's geometry. Its
+  // own rewrite unpacks any elementwise uses at that final geometry.
+  if (isa<npuvector::BroadcastOp, vector::BroadcastOp>(use.getOwner())) {
+    return true;
+  }
+  return use.getOperandNumber() == 0 && isa<arith::SelectOp, npuvector::SelectOp, pypto::SelectOp>(use.getOwner());
+}
+
+/// Query only the consumers that will read the elementwise 0/1 tile.
+static std::optional<unsigned> unpackCastChainMinElemBytes(Value result) {
+  std::optional<unsigned> minBytes;
+  DenseSet<Value> visited;
+  for (OpOperand &use : result.getUses()) {
+    if (keepsPackedMask(use)) {
+      continue;
+    }
+    Operation *user = use.getOwner();
+    if (auto bytes = castResultElemBytes(user); bytes && (!minBytes || *bytes < *minBytes)) {
+      minBytes = bytes;
+    }
+    if (keepsOperandAllocation(user)) {
+      for (Value next : user->getResults()) {
+        collectCastChainMinElemBytesImpl(next, 0, minBytes, visited);
+      }
+    }
+  }
+  return minBytes;
+}
+
+/// Legacy vector types name logical elements, so their physical allocation
+/// remains explicit. PyPTO tile types already carry the final allocation.
+static SmallVector<int64_t> maskUnpackAllocation(Operation *replaced, Value mask) {
+  SmallVector<int64_t> allocation(cast<ShapedType>(mask.getType()).getShape());
+  if (!isa<VectorType>(mask.getType())) {
+    return allocation;
+  }
+  if (auto inferred = tileAllocationShape(mask)) {
+    allocation = std::move(*inferred);
+  }
+  if (auto minBytes = unpackCastChainMinElemBytes(replaced->getResult(0)); minBytes && !allocation.empty()) {
+    allocation.back() = alignExtentTo32B(allocation.back(), *minBytes);
+  }
+  return allocation;
+}
+
+/// A2/A3 select/expand has no 8-bit form, so unpack BOOL masks into INT32
+/// branches. Casts consuming that integer tile derive their own dtype.
+static Type unpackedMaskType(Type maskType, MLIRContext *ctx) {
+  Type elem = IntegerType::get(ctx, 32);
+  if (auto tile = dyn_cast<pypto::TileType>(maskType)) {
+    return pypto::TileType::get(ctx, elem, tile.getShape());
+  }
+  if (auto nv = dyn_cast<npuvector::NPUVectorType>(maskType)) {
+    return pyptoType(nv.cloneWith(nv.getShape(), elem));
+  }
+  return VectorType::get(cast<ShapedType>(maskType).getShape(), elem);
+}
+
+/// Construct each branch once at the mask's final physical allocation,
+/// retaining the original logical valid region independently. Narrow-cast
+/// row alignment is propagated to the producers before the mask is built;
+/// padding branches afterwards would disagree with the mask and select.
+static Value createMaskUnpackBranch(Location loc, Type type, ArrayRef<int64_t> allocation, ArrayRef<int64_t> validShape,
+                                    StringRef value, ConversionPatternRewriter &rewriter) {
+  SmallVector<Value> extents;
+  bool explicitAllocation = allocation != cast<ShapedType>(type).getShape();
+  if (explicitAllocation || validShape != allocation) {
+    std::transform(allocation.begin(), allocation.end(), std::back_inserter(extents),
+                   [&](int64_t physical) { return rewriter.create<arith::ConstantIndexOp>(loc, physical); });
+  }
+  Value full = rewriter.create<pypto::TileFullOp>(loc, type, rewriter.getStringAttr(value),
+                                                  explicitAllocation ? ValueRange(extents) : ValueRange{});
+  if (validShape == allocation) {
+    return full;
+  }
+  SmallVector<Value> valid;
+  std::transform(validShape.begin(), validShape.end(), std::back_inserter(valid),
+                 [&](int64_t actual) { return rewriter.create<arith::ConstantIndexOp>(loc, actual); });
+  return rewriter.create<pypto::ReshapeOp>(loc, type, full, ValueRange(extents), ValueRange(valid));
+}
+
 /// Finalizes a tile comparison rewrite: `mask` is the freshly built
 /// `pypto.cmp` and `replaced` the comparison (or comparison broadcast)
 /// being rewritten, whose result uses must now read from the mask. A tile
@@ -1164,119 +1411,35 @@ static std::optional<unsigned> cmpTypeCodeFor(arith::CmpFPredicate predicate) {
 /// shaped result has no extents to bind a tile_full to and keeps the bare
 /// mask.
 static void replaceWithPackedMask(Operation *replaced, Value mask, ConversionPatternRewriter &rewriter) {
-  auto keepsPackedMask = [](OpOperand &use) {
-    // A broadcast keeps the mask: its rewrite consumes the comparison
-    // itself (BroadcastCmpMaskPattern fuses it, or the plain broadcast
-    // materialization lifts the i1 tile), and any elementwise consumer
-    // below the broadcast gets its unpacking select at the broadcast's
-    // geometry from that rewrite. Retargeting the source here instead
-    // would leave the broadcast's i1 result reading an i32 source, which
-    // the row/col_expand materialization rejects outright.
-    if (isa<npuvector::BroadcastOp, vector::BroadcastOp>(use.getOwner())) {
-      return true;
-    }
-    return use.getOperandNumber() == 0 && isa<arith::SelectOp, npuvector::SelectOp, pypto::SelectOp>(use.getOwner());
-  };
   bool needsUnpack =
     llvm::any_of(replaced->getResult(0).getUses(), [&](OpOperand &use) { return !keepsPackedMask(use); });
-  Type resultType = replaced->getResult(0).getType();
-  bool staticShape = false;
-  if (auto shaped = dyn_cast<ShapedType>(resultType)) {
-    staticShape = shaped.hasStaticShape();
-  } else if (auto tile = dyn_cast<pypto::TileType>(resultType)) {
-    staticShape = llvm::none_of(tile.getShape(), ShapedType::isDynamic);
-  }
-  if (needsUnpack && staticShape) {
-    Location loc = replaced->getLoc();
-    // A2/A3 has no 8-bit form for tsel/texpands, so the unpacking spells
-    // its branches in i32 -- `pl.const` cannot spell a BOOL literal either
-    // -- and the consumer's cast re-derives its dtype from there (a cast
-    // onto i32 itself folds away as a no-op).
-    Type elem = rewriter.getI32Type();
-    Type unpackType;
-    ArrayRef<int64_t> unpackShape;
-    if (auto tile = dyn_cast<pypto::TileType>(resultType)) {
-      unpackType = pypto::TileType::get(rewriter.getContext(), elem, tile.getShape());
-      unpackShape = tile.getShape();
-    } else if (auto nv = dyn_cast<npuvector::NPUVectorType>(resultType)) {
-      unpackType = nv.cloneWith(nv.getShape(), elem);
-      unpackShape = nv.getShape();
-    } else {
-      auto shaped = cast<ShapedType>(resultType);
-      unpackType = VectorType::get(shaped.getShape(), elem);
-      unpackShape = shaped.getShape();
-    }
-    Value ones =
-      rewriter.create<pypto::TileFullOp>(loc, unpackType, rewriter.getStringAttr("1"), ValueRange{}).getResult();
-    Value zeros =
-      rewriter.create<pypto::TileFullOp>(loc, unpackType, rewriter.getStringAttr("0"), ValueRange{}).getResult();
-    Value unpacked = rewriter.create<pypto::SelectOp>(loc, unpackType, mask, ones, zeros);
-    // Collect the elementwise uses before any rebinding: the rewrite below
-    // maps the comparison onto the same-typed mask, so the deferred
-    // commit-time rebind only ever sees the i1 readers (select conditions
-    // and broadcast sources).
-    SmallVector<OpOperand *> unpackUses;
-    for (OpOperand &use : replaced->getResult(0).getUses()) {
-      if (!keepsPackedMask(use)) unpackUses.push_back(&use);
-    }
-    // A replacement whose type differs from the original result never
-    // rebinds its uses, so route the comparison through the bare mask and
-    // retarget the elementwise consumers onto the unpacking select by hand.
+  auto shaped = dyn_cast<ShapedType>(mask.getType());
+  if (!needsUnpack || !shaped || !shaped.hasStaticShape()) {
     rewriter.replaceOp(replaced, mask);
-    for (OpOperand *use : unpackUses) {
-      rewriter.modifyOpInPlace(use->getOwner(), [&]() { use->set(unpacked); });
-    }
-    // The unpacking's consumer chain re-derives its dtype from the select
-    // (a cast onto i32 folds away), and every cast down that chain clones
-    // the select's allocation while re-typing it (`DeduceTileCastType`):
-    // an INT32 unpacking over [2704] whose chain casts to FP16 then INT8
-    // makes the INT8 tile inherit 2704-byte rows, which `pto.alloc_tile`
-    // rejects. Pad the branch fulls' allocation to the narrowest
-    // downstream dtype and trim the valid region back to the source shape,
-    // the same split the select pattern's branch pad spells; the select
-    // output inherits the branches' allocation, so the whole chain stays
-    // row-aligned.
-    int64_t cols = unpackShape.empty() ? 0 : unpackShape.back();
-    if (auto minBytes = castChainMinElemBytes(unpacked)) {
-      if (cols > 0 && (cols * static_cast<int64_t>(*minBytes)) % 32 != 0) {
-        int64_t paddedCols = alignExtentTo32B(cols, *minBytes);
-        auto padBranch = [&](Value full) -> Value {
-          SmallVector<Value> extents;
-          SmallVector<Value> validExtents;
-          for (unsigned axis = 0; axis < unpackShape.size(); ++axis) {
-            int64_t allocation = axis + 1 == unpackShape.size() ? paddedCols : unpackShape[axis];
-            extents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, allocation));
-            validExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, unpackShape[axis]));
-          }
-          // The full spells the padded allocation in its extents while its
-          // result type keeps naming the valid shape, the same split the
-          // sibling-bounds raise on `tile_full` uses; the reshape keeps
-          // that static type too -- the verifiers only check the element
-          // count against the full's own type and the select demands the
-          // branches match its result shape verbatim.
-          auto paddedFull = rewriter.create<pypto::TileFullOp>(
-            loc, unpackType, full.getDefiningOp<pypto::TileFullOp>().getValue(), ValueRange(extents));
-          return rewriter.create<pypto::ReshapeOp>(loc, unpackType, paddedFull, ValueRange(extents),
-                                                   ValueRange(validExtents));
-        };
-        auto select = unpacked.getDefiningOp<pypto::SelectOp>();
-        // The padded fulls and their reshapes must sit before the select
-        // they feed: the rewriter's insertion point has already moved past
-        // the unpacking itself.
-        rewriter.setInsertionPoint(select);
-        Value paddedOnes = padBranch(ones);
-        Value paddedZeros = padBranch(zeros);
-        rewriter.modifyOpInPlace(select, [&]() {
-          select.getTrueValueMutable().assign(paddedOnes);
-          select.getFalseValueMutable().assign(paddedZeros);
-        });
-        rewriter.eraseOp(ones.getDefiningOp());
-        rewriter.eraseOp(zeros.getDefiningOp());
-      }
-    }
     return;
   }
+  Location loc = replaced->getLoc();
+  Type unpackType = unpackedMaskType(mask.getType(), rewriter.getContext());
+  ArrayRef<int64_t> validShape = shaped.getShape();
+  if (auto logical = dyn_cast<npuvector::NPUVectorType>(replaced->getResult(0).getType())) {
+    validShape = logical.getShape();
+  }
+  SmallVector<int64_t> allocation = maskUnpackAllocation(replaced, mask);
+  Value ones = createMaskUnpackBranch(loc, unpackType, allocation, validShape, "1", rewriter);
+  Value zeros = createMaskUnpackBranch(loc, unpackType, allocation, validShape, "0", rewriter);
+  Value unpacked = rewriter.create<pypto::SelectOp>(loc, unpackType, mask, ones, zeros);
+  // Rebind elementwise consumers separately: the comparison's own
+  // replacement remains the same-typed packed mask for selects/broadcasts.
+  SmallVector<OpOperand *> unpackUses;
+  for (OpOperand &use : replaced->getResult(0).getUses()) {
+    if (!keepsPackedMask(use)) {
+      unpackUses.push_back(&use);
+    }
+  }
   rewriter.replaceOp(replaced, mask);
+  for (OpOperand *use : unpackUses) {
+    rewriter.modifyOpInPlace(use->getOwner(), [&]() { use->set(unpacked); });
+  }
 }
 
 /// Rewrites an integer/float tile comparison into `pypto.cmp`: the
@@ -1295,8 +1458,9 @@ class CmpToPyptoPattern : public OpConversionPattern<SourceOp> {
     if (!code) {
       return rewriter.notifyMatchFailure(op, "comparison predicate has no pl.cmp counterpart");
     }
-    if (llvm::none_of(op->getOperands(),
-                      [](Value operand) { return isa<VectorType, npuvector::NPUVectorType>(operand.getType()); })) {
+    if (llvm::none_of(op->getOperands(), [](Value operand) {
+          return isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(operand.getType());
+        })) {
       // A scalar arith comparison stays put; a scalar npuvector
       // comparison cannot, so it rewrites onto the arith spelling,
       // which stage two renders with the infix pseudo-callees.
@@ -1310,10 +1474,14 @@ class CmpToPyptoPattern : public OpConversionPattern<SourceOp> {
       }
       return rewriter.notifyMatchFailure(op, "scalar comparison stays arith");
     }
+    if (fuseScalarBroadcastConsumer(op, adaptor.getOperands(), rewriter)) {
+      return success();
+    }
     auto predicate = static_cast<pypto::CmpPredicate>(*code);
     Location loc = op->getLoc();
-    Type resultType = op->getResult(0).getType();
-    Value mask = rewriter.create<pypto::CmpOp>(loc, resultType, predicate, op->getOperands()[0], op->getOperands()[1]);
+    Type resultType = pyptoResultTypes(op, adaptor.getOperands()).front();
+    Value mask = rewriter.create<pypto::CmpOp>(loc, pyptoType(resultType), predicate, adaptor.getOperands()[0],
+                                               adaptor.getOperands()[1]);
     replaceWithPackedMask(op, mask, rewriter);
     return success();
   }
@@ -1329,7 +1497,7 @@ class CastToPyptoPattern : public OpConversionPattern<SourceOp> {
 
   LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    Type resultType = op->getResult(0).getType();
+    Type resultType = pyptoResultTypes(op, adaptor.getOperands()).front();
     if (!pyptoDtypeName(getElementTypeOrSelf(resultType))) {
       return rewriter.notifyMatchFailure(op, "cast target type has no PyPTO dtype");
     }
@@ -1337,10 +1505,10 @@ class CastToPyptoPattern : public OpConversionPattern<SourceOp> {
       // A comparison unpacking already materialized this dtype (the mask
       // select spells its branches in i32); ptoas rejects a same-dtype
       // tile cast outright, so the cast folds into a plain forwarding.
-      rewriter.replaceOp(op, op->getOperand(0));
+      rewriter.replaceOp(op, adaptor.getOperands()[0]);
       return success();
     }
-    rewriter.replaceOpWithNewOp<pypto::CastOp>(op, resultType, op->getOperand(0));
+    rewriter.replaceOpWithNewOp<pypto::CastOp>(op, pyptoType(resultType), adaptor.getOperands()[0]);
     return success();
   }
 };
@@ -1355,11 +1523,11 @@ class BitcastToPyptoPattern : public OpConversionPattern<SourceOp> {
 
   LogicalResult matchAndRewrite(SourceOp op, typename SourceOp::Adaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    Type resultType = op->getResult(0).getType();
+    Type resultType = pyptoResultTypes(op, adaptor.getOperands()).front();
     if (!pyptoDtypeName(getElementTypeOrSelf(resultType))) {
       return rewriter.notifyMatchFailure(op, "cast target type has no PyPTO dtype");
     }
-    rewriter.replaceOpWithNewOp<pypto::ReinterpretViewOp>(op, resultType, op->getOperand(0));
+    rewriter.replaceOpWithNewOp<pypto::ReinterpretViewOp>(op, pyptoType(resultType), adaptor.getOperands()[0]);
     return success();
   }
 };
@@ -1409,7 +1577,7 @@ class ArithConstantPattern : public OpConversionPattern<arith::ConstantOp> {
     if (!dtype) {
       return rewriter.notifyMatchFailure(op, "scalar type has no PyPTO dtype");
     }
-    rewriter.replaceOpWithNewOp<pypto::ConstantOp>(op, type, rewriter.getStringAttr(*text));
+    rewriter.replaceOpWithNewOp<pypto::ConstantOp>(op, pyptoType(type), rewriter.getStringAttr(*text));
     return success();
   }
 
@@ -1461,7 +1629,8 @@ class ArithConstantPattern : public OpConversionPattern<arith::ConstantOp> {
       }
       extents = ValueRange(raised);
     }
-    rewriter.replaceOpWithNewOp<pypto::TileFullOp>(op, type, rewriter.getStringAttr(*elem), extents);
+    rewriter.replaceOpWithNewOp<pypto::TileFullOp>(op, pyptoExtentType(type, extents), rewriter.getStringAttr(*elem),
+                                                   extents);
     return success();
   }
 };
@@ -1565,19 +1734,24 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
           shapeValues[tileToSrc[tileDim]] =
             rewriter.create<arith::ConstantIndexOp>(loc, shaped.getDimSize(tileDim));
         }
-        Value load = rewriter.create<pypto::LoadOp>(loc, op.getVector().getType(), op.getSource(), op.getIndices(),
-                                                    ValueRange(shapeValues), ValueRange(shapeValues));
-        rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getVector().getType(), load, ValueRange(),
-                                                       ValueRange());
+        Value load = rewriter.create<pypto::LoadOp>(
+          loc, pyptoLoadType(op.getVector().getType(), op.getSource(), ValueRange(shapeValues)),
+          mapped(rewriter, op.getSource()), mapped(rewriter, op.getIndices()),
+          mapped(rewriter, ValueRange(shapeValues)), mapped(rewriter, ValueRange(shapeValues)));
+        rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, pyptoExtentType(op.getVector().getType(), ValueRange()), load,
+                                                      ValueRange(), ValueRange());
         return success();
       }
-      Value load = rewriter.create<pypto::LoadOp>(op.getLoc(), op.getVector().getType(), op.getSource(),
-                                                  op.getIndices(), ValueRange{}, ValueRange{});
-      rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getVector().getType(), load, ValueRange(), ValueRange());
+      Value load = rewriter.create<pypto::LoadOp>(
+        op.getLoc(), pyptoLoadType(op.getVector().getType(), op.getSource(), ValueRange{}),
+        mapped(rewriter, op.getSource()), mapped(rewriter, op.getIndices()), ValueRange{}, ValueRange{});
+      rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, pyptoExtentType(op.getVector().getType(), ValueRange()), load,
+                                                    ValueRange(), ValueRange());
       return success();
     }
-    rewriter.replaceOpWithNewOp<pypto::LoadOp>(op, op.getVector().getType(), op.getSource(), op.getIndices(),
-                                               ValueRange{}, ValueRange{});
+    rewriter.replaceOpWithNewOp<pypto::LoadOp>(
+      op, pyptoLoadType(op.getVector().getType(), op.getSource(), ValueRange{}), mapped(rewriter, op.getSource()),
+      mapped(rewriter, op.getIndices()), ValueRange{}, ValueRange{});
     return success();
   }
 
@@ -1675,14 +1849,19 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
       for (unsigned tileDim = 0; tileDim < tileRank; ++tileDim) {
         tileExtents.push_back(paddedValues[tileToSrc[tileDim]]);
       }
-      Value load = rewriter.create<pypto::LoadOp>(op.getLoc(), op.getVector().getType(), op.getSource(),
-                                                  op.getIndices(), ValueRange(paddedValues), ValueRange(validValues));
-      rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getVector().getType(), load, ValueRange(tileExtents),
-                                                    ValueRange());
+      Value load = rewriter.create<pypto::LoadOp>(
+        op.getLoc(), pyptoLoadType(op.getVector().getType(), op.getSource(), ValueRange(paddedValues)),
+        mapped(rewriter, op.getSource()), mapped(rewriter, op.getIndices()), mapped(rewriter, ValueRange(paddedValues)),
+        mapped(rewriter, ValueRange(validValues)));
+      rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op,
+                                                    pyptoExtentType(op.getVector().getType(), ValueRange(tileExtents)),
+                                                    load, mapped(rewriter, ValueRange(tileExtents)), ValueRange());
       return success();
     }
-    rewriter.replaceOpWithNewOp<pypto::LoadOp>(op, op.getVector().getType(), op.getSource(), op.getIndices(),
-                                               ValueRange(paddedValues), ValueRange(validValues));
+    rewriter.replaceOpWithNewOp<pypto::LoadOp>(
+      op, pyptoLoadType(op.getVector().getType(), op.getSource(), ValueRange(paddedValues)),
+      mapped(rewriter, op.getSource()), mapped(rewriter, op.getIndices()), mapped(rewriter, ValueRange(paddedValues)),
+      mapped(rewriter, ValueRange(validValues)));
     return success();
   }
 
@@ -1766,8 +1945,10 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
       emitRankReducedDynamicLoad(op, shaped, rewriter, shapeValues, validValues, tileToSrc, srcRank);
       return success();
     }
-    rewriter.replaceOpWithNewOp<pypto::LoadOp>(op, op.getVector().getType(), op.getSource(), op.getIndices(),
-                                               ValueRange(shapeValues), ValueRange(validValues));
+    rewriter.replaceOpWithNewOp<pypto::LoadOp>(
+      op, pyptoLoadType(op.getVector().getType(), op.getSource(), ValueRange(shapeValues)),
+      mapped(rewriter, op.getSource()), mapped(rewriter, op.getIndices()), mapped(rewriter, ValueRange(shapeValues)),
+      mapped(rewriter, ValueRange(validValues)));
     return success();
   }
 
@@ -1826,10 +2007,13 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
       srcShape[tileToSrc[tileDim]] = shapeValues[tileDim];
       srcValid[tileToSrc[tileDim]] = validValues[tileDim];
     }
-    Value load = rewriter.create<pypto::LoadOp>(loc, op.getVector().getType(), op.getSource(), op.getIndices(),
-                                                ValueRange(srcShape), ValueRange(srcValid));
-    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getVector().getType(), load, ValueRange(tileExtents),
-                                                  ValueRange());
+    Value load =
+      rewriter.create<pypto::LoadOp>(loc, pyptoLoadType(op.getVector().getType(), op.getSource(), ValueRange(srcShape)),
+                                     mapped(rewriter, op.getSource()), mapped(rewriter, op.getIndices()),
+                                     mapped(rewriter, ValueRange(srcShape)), mapped(rewriter, ValueRange(srcValid)));
+    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op,
+                                                  pyptoExtentType(op.getVector().getType(), ValueRange(tileExtents)),
+                                                  load, mapped(rewriter, ValueRange(tileExtents)), ValueRange());
   }
 };
 
@@ -1918,7 +2102,8 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
       return success();
     }
 
-    rewriter.create<pypto::StoreOp>(loc, op.getVector(), op.getSource(), op.getIndices());
+    rewriter.create<pypto::StoreOp>(loc, mapped(rewriter, op.getVector()), mapped(rewriter, op.getSource()),
+                                    mapped(rewriter, op.getIndices()));
     finishRewrite(rewriter, op);
     return success();
   }
@@ -1971,7 +2156,9 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
   /// Reads one scalar element out of a tile: `pl.read(tile, [k])`.
   static Value scalarRead(ConversionPatternRewriter &rewriter, Location loc, Value tile, Type elemType, int64_t index) {
     Value coord = rewriter.create<arith::ConstantIndexOp>(loc, index);
-    return rewriter.create<pypto::ReadOp>(loc, elemType, tile, ValueRange(coord)).getResult();
+    return rewriter
+      .create<pypto::ReadOp>(loc, pyptoType(elemType), mapped(rewriter, tile), mapped(rewriter, ValueRange(coord)))
+      .getResult();
   }
 
   /// Writes one scalar into `dest` at `indices` with `pl.write`.
@@ -1983,7 +2170,8 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
         offsets.insert(offsets.begin(), rewriter.create<arith::ConstantIndexOp>(loc, 0));
       }
     }
-    rewriter.create<pypto::WriteOp>(loc, dest, scalar, ValueRange(offsets));
+    rewriter.create<pypto::WriteOp>(loc, mapped(rewriter, dest), mapped(rewriter, scalar),
+                                    mapped(rewriter, ValueRange(offsets)));
   }
 
   /// Writes a scalar into a single-element destination with `pl.write`,
@@ -1994,7 +2182,8 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     for (int64_t d = 0; d < destType.getRank(); ++d) {
       offsets.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
     }
-    rewriter.create<pypto::WriteOp>(loc, dest, scalar, ValueRange(offsets));
+    rewriter.create<pypto::WriteOp>(loc, mapped(rewriter, dest), mapped(rewriter, scalar),
+                                    mapped(rewriter, ValueRange(offsets)));
   }
 
   /// The allocation bound of a dynamic rank-1 tile produced by an
@@ -2170,7 +2359,7 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     // Loop-carried tiles: an scf.for result keeps the allocation of the
     // yielded value, and an iter_arg keeps the init's.
     if (auto arg = dyn_cast<BlockArgument>(v)) {
-      if (auto loop = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
+      if (auto loop = dyn_cast_or_null<scf::ForOp>(arg.getOwner()->getParentOp())) {
         if (arg.getArgNumber() > 0) {
           return dynamicTileExtent(loop.getInitArgs()[arg.getArgNumber() - 1], depth + 1);
         }
@@ -2226,7 +2415,7 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     // A dynamic extent names no element count of its own: the tile was
     // allocated by the producing read, whose maxSizes bound it.
     std::optional<int64_t> dynamicExtent;
-    int64_t n = valueType.getNumElements();
+    int64_t n = valueType.hasStaticShape() ? valueType.getNumElements() : ShapedType::kDynamic;
     int64_t validN = n;
     if (n == ShapedType::kDynamic) {
       dynamicExtent = dynamicTileExtent(vector);
@@ -2242,7 +2431,14 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     // conserves allocated elements, while the store must write only the
     // valid region, which the valid-extent reshape spells out.
     bool lifted = false;
-    if (auto allocation = tileAllocationShape(vector);
+    auto convertedTile = dyn_cast<pypto::TileType>(mapped(rewriter, vector).getType());
+    if (convertedTile && convertedTile.getRank() == 1 &&
+        llvm::none_of(convertedTile.getShape(), ShapedType::isDynamic)) {
+      // The converted value carries the actual allocation. Keep the
+      // source's valid count, or inherit its runtime valid region.
+      n = convertedTile.getShape()[0];
+      lifted = validN != ShapedType::kDynamic && n > validN;
+    } else if (auto allocation = tileAllocationShape(vector);
         allocation && allocation->size() == 1 && !ShapedType::isDynamic((*allocation)[0]) && (*allocation)[0] > n) {
       n = (*allocation)[0];
       lifted = true;
@@ -2281,14 +2477,17 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
       } else if (auto funcOp = op->template getParentOfType<func::FuncOp>()) {
         rewriter.setInsertionPointToStart(&funcOp.getBody().front());
       }
-      storeDest =
-        rewriter.create<pypto::ReshapeOp>(loc, viewType, op.getSource(), ValueRange(), ValueRange()).getResult();
+      storeDest = rewriter
+                    .create<pypto::ReshapeOp>(loc, pyptoExtentType(viewType, ValueRange()),
+                                              mapped(rewriter, op.getSource()), ValueRange(), ValueRange())
+                    .getResult();
     }
     llvm::append_range(offsetItems, op.getIndices());
     // `pypto.store` keeps the offsets as explicit index operands;
     // convert-pypto-to-emitpy folds the constant ones back into the
     // `pl.store` offsets list.
-    rewriter.create<pypto::StoreOp>(loc, reshaped, storeDest, ValueRange(offsetItems));
+    rewriter.create<pypto::StoreOp>(loc, reshaped, mapped(rewriter, storeDest),
+                                    mapped(rewriter, ValueRange(offsetItems)));
     return success();
   }
 
@@ -2320,8 +2519,10 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
       } else if (auto funcOp = op->template getParentOfType<func::FuncOp>()) {
         rewriter.setInsertionPointToStart(&funcOp.getBody().front());
       }
-      scalarDest =
-        rewriter.create<pypto::ReshapeOp>(loc, viewType, op.getSource(), ValueRange(), ValueRange()).getResult();
+      scalarDest = rewriter
+                     .create<pypto::ReshapeOp>(loc, pyptoExtentType(viewType, ValueRange()),
+                                               mapped(rewriter, op.getSource()), ValueRange(), ValueRange())
+                     .getResult();
     }
     for (int64_t k = 0; k < validN; ++k) {
       Value elem = scalarRead(rewriter, loc, vector, elemType, k);
@@ -2341,6 +2542,27 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
       writeScalar(rewriter, loc, scalarDest, elemIndices, elem);
     }
     return success();
+  }
+
+  /// Lift the logical store shape to the allocation carried by its source.
+  static bool refineRankReducedStoreAllocation(Value vector, ShapedType valueType, SmallVector<int64_t> &shape,
+                                               ArrayRef<int64_t> valid, ConversionPatternRewriter &rewriter) {
+    auto convertedTile = dyn_cast<pypto::TileType>(mapped(rewriter, vector).getType());
+    if (convertedTile && convertedTile.getRank() == static_cast<int64_t>(shape.size()) &&
+        llvm::none_of(convertedTile.getShape(), ShapedType::isDynamic)) {
+      shape.assign(convertedTile.getShape().begin(), convertedTile.getShape().end());
+      return valueType.hasStaticShape() && !llvm::equal(shape, valid);
+    }
+    bool lifted = false;
+    if (auto allocation = tileAllocationShape(vector); allocation && allocation->size() == shape.size()) {
+      for (auto [dim, alloc] : llvm::zip(shape, *allocation)) {
+        if (!ShapedType::isDynamic(alloc) && alloc > dim) {
+          dim = alloc;
+          lifted = true;
+        }
+      }
+    }
+    return lifted;
   }
 
   /// Stores a rank-reduced value (destination rank > tile rank) through a
@@ -2374,16 +2596,8 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     // bound on every dim while the store itself writes only the valid
     // region. Lift each dim to the tile's allocated bound and keep the
     // valid shape for the store's valid extents.
-    bool lifted = false;
     SmallVector<int64_t> valid = shape;
-    if (auto allocation = tileAllocationShape(vector); allocation && allocation->size() == shape.size()) {
-      for (auto [dim, alloc] : llvm::zip(shape, *allocation)) {
-        if (!ShapedType::isDynamic(alloc) && alloc > dim) {
-          dim = alloc;
-          lifted = true;
-        }
-      }
-    }
+    bool lifted = refineRankReducedStoreAllocation(vector, valueType, shape, valid, rewriter);
     // Each tile dim spans the destination dim its permutation-map result
     // projects onto; every other destination dim is padded with a 1. A
     // minor-identity map keeps the tile dims trailing, while a leading
@@ -2409,7 +2623,8 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     Value reshaped;
     if (!lifted) {
       Type paddedType = pypto::TileType::get(rewriter.getContext(), elemType, padded);
-      reshaped = rewriter.create<pypto::ReshapeOp>(loc, paddedType, vector, ValueRange(), ValueRange());
+      reshaped = rewriter.create<pypto::ReshapeOp>(loc, pyptoExtentType(paddedType, ValueRange()),
+                                                   mapped(rewriter, vector), ValueRange(), ValueRange());
     } else {
       // A static lifted result type would trip the IR verifier's
       // element-count check, which compares against the source's valid
@@ -2432,10 +2647,11 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
           validExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, validDim));
         }
       }
-      reshaped = rewriter.create<pypto::ReshapeOp>(loc, paddedType, vector, ValueRange(extents),
-                                                   ValueRange(validExtents));
+      reshaped = rewriter.create<pypto::ReshapeOp>(loc, pyptoExtentType(paddedType, ValueRange(extents)),
+                                                   mapped(rewriter, vector), mapped(rewriter, ValueRange(extents)),
+                                                   mapped(rewriter, ValueRange(validExtents)));
     }
-    rewriter.create<pypto::StoreOp>(loc, reshaped, op.getSource(), op.getIndices());
+    rewriter.create<pypto::StoreOp>(loc, reshaped, mapped(rewriter, op.getSource()), mapped(rewriter, op.getIndices()));
     return success();
   }
 
@@ -2484,7 +2700,9 @@ static Value readTileElement(ConversionPatternRewriter &rewriter, Location loc, 
   coords.reserve(index.size());
   llvm::transform(index, std::back_inserter(coords),
                   [&](int64_t k) { return rewriter.create<arith::ConstantIndexOp>(loc, k); });
-  return rewriter.create<pypto::ReadOp>(loc, resultType, tile, ValueRange(coords)).getResult();
+  return rewriter
+    .create<pypto::ReadOp>(loc, pyptoType(resultType), mapped(rewriter, tile), mapped(rewriter, ValueRange(coords)))
+    .getResult();
 }
 
 /// Combines two reduction partials with scalar arith; a null `acc`
@@ -2502,10 +2720,10 @@ static Value combineScalars(ConversionPatternRewriter &rewriter, Location loc, T
                    : rewriter.create<arith::MulIOp>(loc, resultType, acc, elem).getResult();
   }
   if (kind == pypto::ReduceKind::min) {
-    return rewriter.create<pypto::MinOp>(loc, resultType, acc, elem);
+    return rewriter.create<pypto::MinOp>(loc, pyptoType(resultType), mapped(rewriter, acc), mapped(rewriter, elem));
   }
   if (kind == pypto::ReduceKind::max) {
-    return rewriter.create<pypto::MaxOp>(loc, resultType, acc, elem);
+    return rewriter.create<pypto::MaxOp>(loc, pyptoType(resultType), mapped(rewriter, acc), mapped(rewriter, elem));
   }
   return isFloat ? rewriter.create<arith::AddFOp>(loc, resultType, acc, elem).getResult()
                  : rewriter.create<arith::AddIOp>(loc, resultType, acc, elem).getResult();
@@ -2599,7 +2817,7 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
     } else {
       return rewriter.notifyMatchFailure(op, "only first/last axis reductions map onto pl.row_*/pl.col_*");
     }
-    Type resultType = op->getResult(0).getType();
+    Type resultType = pyptoResultType(op->getResult(0));
     SmallVector<int64_t> scratchShape;
     if (shaped.hasStaticShape()) {
       scratchShape.assign(shaped.getShape().begin(), shaped.getShape().end());
@@ -2641,9 +2859,11 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
       }
     }
     Value tmp = createTmpTile(rewriter, loc, scratchShape, shaped.getElementType());
-    Value reduced = rewriter.create<pypto::ReductionOp>(loc, resultType, kind, axis, op.getVector(), tmp).getResult();
+    Value reduced =
+      rewriter.create<pypto::ReductionOp>(loc, pyptoType(resultType), kind, axis, mapped(rewriter, op.getVector()), tmp)
+        .getResult();
     if (op.getAcc()) {
-      reduced = rewriter.create<pypto::AddOp>(loc, resultType, reduced, op.getAcc());
+      reduced = rewriter.create<pypto::AddOp>(loc, pyptoType(resultType), reduced, mapped(rewriter, op.getAcc()));
     }
     rewriter.replaceOp(op, reduced);
     return success();
@@ -2670,7 +2890,7 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
       return rewriter.notifyMatchFailure(op, "accumulator chaining is not supported for full reductions");
     }
 
-    Type resultType = op->getResult(0).getType();
+    Type resultType = pyptoResultType(op->getResult(0));
     Type elemType = shaped.getElementType();
     Value input = op.getVector();
     unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
@@ -2705,7 +2925,8 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
     Value reshaped = reshapeTileOp(rewriter, loc, input, r, c, shaped.getElementType());
     Value rowTmp = createTmpTile(rewriter, loc, SmallVector<int64_t>{r, c}, shaped.getElementType());
     Value row =
-      rewriter.create<pypto::ReductionOp>(loc, resultType, kind, pypto::ReduceAxis::row, reshaped, rowTmp).getResult();
+      rewriter.create<pypto::ReductionOp>(loc, pyptoType(resultType), kind, pypto::ReduceAxis::row, reshaped, rowTmp)
+        .getResult();
     return combineRowPartials(rewriter, loc, kind, resultType, row, r);
   }
 
@@ -2714,8 +2935,10 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
   static Value reduceViaDeviceRowReduce(ConversionPatternRewriter &rewriter, Location loc, pypto::ReduceKind kind,
                                         ShapedType shaped, Type resultType, Value input, int64_t rows) {
     Value rowTmp = createTmpTile(rewriter, loc, shaped.getShape(), shaped.getElementType());
-    Value row =
-      rewriter.create<pypto::ReductionOp>(loc, resultType, kind, pypto::ReduceAxis::row, input, rowTmp).getResult();
+    Value row = rewriter
+                  .create<pypto::ReductionOp>(loc, pyptoType(resultType), kind, pypto::ReduceAxis::row,
+                                              mapped(rewriter, input), rowTmp)
+                  .getResult();
     return combineRowPartials(rewriter, loc, kind, resultType, row, rows);
   }
 
@@ -2998,8 +3221,9 @@ static Value rowExpandOntoCarrier(ShapedType shapedResult, Location loc, StringR
     vecFlatValid.push_back(constant(staticRows));
     vecFlatValid.push_back(constant(1));
   }
-  Value vecFlat = rewriter.create<pypto::ReshapeOp>(loc, shapedResult.clone(vecFlatShape), vec,
-                                                    ValueRange(vecFlatExtents), ValueRange(vecFlatValid));
+  Value vecFlat = rewriter.create<pypto::ReshapeOp>(
+    loc, pyptoExtentType(pyptoType(shapedResult.clone(vecFlatShape)), ValueRange(vecFlatExtents)),
+    mapped(rewriter, vec), mapped(rewriter, ValueRange(vecFlatExtents)), mapped(rewriter, ValueRange(vecFlatValid)));
 
   bool dynamicCols = ShapedType::isDynamic(destShape.back());
   int64_t carrierCols = dynamicCols ? 0 : alignExtentTo32B(destShape.back(), elemBytes);
@@ -3016,17 +3240,23 @@ static Value rowExpandOntoCarrier(ShapedType shapedResult, Location loc, StringR
     carrierFlatBounds.push_back(rows());
     carrierFlatBounds.push_back(dynamicCols ? destBounds.back() : constant(carrierCols));
   }
-  Value carrier = rewriter.create<pypto::TileFullOp>(loc, shapedResult.clone(carrierFlatShape),
-                                                     rewriter.getStringAttr(zero), ValueRange(carrierFlatBounds))
-                    .getResult();
-  Value expanded = rewriter.create<pypto::RowExpandAddOp>(loc, shapedResult.clone(carrierFlatShape), carrier, vecFlat)
-                     .getResult();
+  Value carrier =
+    rewriter
+      .create<pypto::TileFullOp>(
+        loc, pyptoExtentType(pyptoType(shapedResult.clone(carrierFlatShape)), ValueRange(carrierFlatBounds)),
+        rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(carrierFlatBounds)))
+      .getResult();
+  Value expanded =
+    rewriter.create<pypto::RowExpandAddOp>(loc, pyptoType(shapedResult.clone(carrierFlatShape)), carrier, vecFlat)
+      .getResult();
   SmallVector<Value> resultExtents;
   SmallVector<Value> resultValid;
   appendRowExpandResultExtents(destShape, destBounds, dynamicCols, carrierCols, rank, loc, resultExtents, resultValid,
                                rewriter);
-  return rewriter.create<pypto::ReshapeOp>(loc, shapedResult.clone(destShape), expanded, ValueRange(resultExtents),
-                                           ValueRange(resultValid))
+  return rewriter
+    .create<pypto::ReshapeOp>(loc, pyptoExtentType(pyptoType(shapedResult.clone(destShape)), ValueRange(resultExtents)),
+                              expanded, mapped(rewriter, ValueRange(resultExtents)),
+                              mapped(rewriter, ValueRange(resultValid)))
     .getResult();
 }
 
@@ -3050,8 +3280,8 @@ static Value liftDroppedAxis(ShapedType shapedResult, Location loc, StringRef ze
     if (!bounds.empty()) {
       std::swap(bounds[a], bounds[b]);
     }
-    value = rewriter.create<pypto::TransposeOp>(loc, shapedResult.clone(shape), value, static_cast<uint64_t>(a),
-                                                static_cast<uint64_t>(b));
+    value = rewriter.create<pypto::TransposeOp>(loc, pyptoType(shapedResult.clone(shape)), mapped(rewriter, value),
+                                                static_cast<uint64_t>(a), static_cast<uint64_t>(b));
   };
   if (rank == 2) {
     // A rank-2 working shape already meets the expand family's vector
@@ -3061,13 +3291,18 @@ static Value liftDroppedAxis(ShapedType shapedResult, Location loc, StringRef ze
     auto curShaped = cast<ShapedType>(cur.getType());
     Type expandType = curShaped.clone(targetShape);
     Value carrier =
-      rewriter.create<pypto::TileFullOp>(loc, expandType, rewriter.getStringAttr(zero), ValueRange(targetBounds))
+      rewriter
+        .create<pypto::TileFullOp>(loc, pyptoExtentType(expandType, ValueRange(targetBounds)),
+                                   rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(targetBounds)))
         .getResult();
-    Value expanded = dropped + 1 == rank
-                       ? rewriter.create<pypto::RowExpandAddOp>(loc, expandType, carrier, cur).getResult()
-                       : rewriter.create<pypto::ColExpandAddOp>(loc, expandType, carrier, cur).getResult();
+    Value expanded =
+      dropped + 1 == rank
+        ? rewriter.create<pypto::RowExpandAddOp>(loc, pyptoType(expandType), carrier, mapped(rewriter, cur)).getResult()
+        : rewriter.create<pypto::ColExpandAddOp>(loc, pyptoType(expandType), carrier, mapped(rewriter, cur))
+            .getResult();
     if (expandType != shapedResult.clone(targetShape)) {
-      expanded = rewriter.create<pypto::ReinterpretViewOp>(loc, shapedResult.clone(targetShape), expanded).getResult();
+      expanded = rewriter.create<pypto::ReinterpretViewOp>(loc, pyptoType(shapedResult.clone(targetShape)), expanded)
+                   .getResult();
     }
     return expanded;
   }
@@ -3197,7 +3432,7 @@ static LogicalResult materializeGeneralLift(npuvector::BroadcastOp op, ShapedTyp
     return failure();
   }
   Location loc = op.getLoc();
-  Type convertedResult = op->getResult(0).getType();
+  Type convertedResult = pyptoResultType(op->getResult(0));
   FailureOr<SmallVector<Value>> extents = buildBroadcastExtents(op, resultType, loc, rewriter);
   if (failed(extents)) {
     return failure();
@@ -3235,9 +3470,12 @@ static LogicalResult materializeGeneralLift(npuvector::BroadcastOp op, ShapedTyp
   SmallVector<Value> curExtents;
   SmallVector<Value> curValid;
   appendLiftConservedExtents(isDropped, rank, srcRank, srcAlloc, curShape, loc, curExtents, curValid, rewriter);
-  Value cur = rewriter.create<pypto::ReshapeOp>(loc, shapedResult.clone(curShape), op.getSource(),
-                                                curExtents.empty() ? ValueRange(curBounds) : ValueRange(curExtents),
-                                                ValueRange(curValid));
+  Value cur = rewriter.create<pypto::ReshapeOp>(
+    loc,
+    pyptoExtentType(pyptoType(shapedResult.clone(curShape)),
+                    curExtents.empty() ? ValueRange(curBounds) : ValueRange(curExtents)),
+    mapped(rewriter, op.getSource()), curExtents.empty() ? ValueRange(curBounds) : ValueRange(curExtents),
+    mapped(rewriter, ValueRange(curValid)));
   std::string zero = isa<FloatType>(resultType.getElementType()) ? "0.0" : "0";
   // Lift one dropped axis at a time, tail first so every expand only
   // meets already-lifted axes behind the one it broadcasts.
@@ -3387,8 +3625,8 @@ static std::pair<Type, SmallVector<Value>> liftedVectorView(npuvector::Broadcast
 /// valid bound); the max size stands in when the allocation is not
 /// statically resolvable. A static source extent is a valid bound too:
 /// the view carries the allocated extent as a constant the emitpy
-/// lowering renders literally, while the IR type stays dynamic so the
-/// expand's strict row/column count check exempts it. The carrier
+/// lowering renders literally. Target types record that physical extent;
+/// runtime bounds remain dynamic. The carrier
 /// keeps the aligned bound `buildBroadcastExtents` produces — PTOAS
 /// pads a `tile_full` allocation onto the same row grid, so the
 /// expand still combines same-shaped tiles. The identity-mapped axis
@@ -3426,7 +3664,7 @@ static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, Shape
     return failure();
   }
   Location loc = op.getLoc();
-  Type convertedResult = op->getResult(0).getType();
+  Type convertedResult = pyptoResultType(op->getResult(0));
   FailureOr<SmallVector<Value>> extents = buildBroadcastExtents(op, resultType, loc, rewriter);
   if (failed(extents)) {
     return failure();
@@ -3443,11 +3681,14 @@ static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, Shape
   // exactly the src1 contract the expand families check for. Naming
   // valid extents instead would slice a dynamic `[?, 1]` view whose
   // row-major layout fails the packed-column check.
-  Value vec = rewriter.create<pypto::ReshapeOp>(loc, vecType, op.getSource(), ValueRange(vecExtents), ValueRange());
+  Value vec = rewriter.create<pypto::ReshapeOp>(loc, pyptoExtentType(vecType, ValueRange(vecExtents)),
+                                                mapped(rewriter, op.getSource()),
+                                                mapped(rewriter, ValueRange(vecExtents)), ValueRange());
   std::string zero = isa<FloatType>(resultType.getElementType()) ? "0.0" : "0";
-  Value carrier =
-    rewriter.create<pypto::TileFullOp>(loc, convertedResult, rewriter.getStringAttr(zero), ValueRange(*extents))
-      .getResult();
+  Value carrier = rewriter
+                    .create<pypto::TileFullOp>(loc, pyptoExtentType(convertedResult, ValueRange(*extents)),
+                                               rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(*extents)))
+                    .getResult();
   SmallVector<Value> carrierValid = broadcastValidExtents(op, resultType, loc, rewriter);
   Value result;
   if (rowLift) {
@@ -3459,10 +3700,13 @@ static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, Shape
     // re-view as a reshape+slice sandwich.
     if (!carrierValid.empty()) {
       carrier =
-        rewriter.create<pypto::ReshapeOp>(loc, convertedResult, carrier, ValueRange(*extents), ValueRange(carrierValid))
+        rewriter
+          .create<pypto::ReshapeOp>(loc, pyptoExtentType(convertedResult, ValueRange(*extents)), carrier,
+                                    mapped(rewriter, ValueRange(*extents)), mapped(rewriter, ValueRange(carrierValid)))
           .getResult();
     }
-    result = rewriter.create<pypto::RowExpandAddOp>(loc, convertedResult, carrier, vec).getResult();
+    result = rewriter.create<pypto::RowExpandAddOp>(loc, pyptoType(convertedResult), carrier, mapped(rewriter, vec))
+               .getResult();
   } else {
     // Column expand mirrors that with one asymmetry: its codegen cannot
     // read a pto.subview operand and materializes one into a pto.textract,
@@ -3472,10 +3716,13 @@ static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, Shape
     // just carry replicated columns) and re-view the expand's fresh
     // result instead: consumers outside the tcolexpand family read
     // subview SSAs natively.
-    result = rewriter.create<pypto::ColExpandAddOp>(loc, convertedResult, carrier, vec).getResult();
+    result = rewriter.create<pypto::ColExpandAddOp>(loc, pyptoType(convertedResult), carrier, mapped(rewriter, vec))
+               .getResult();
     if (!carrierValid.empty()) {
       result =
-        rewriter.create<pypto::ReshapeOp>(loc, convertedResult, result, ValueRange(*extents), ValueRange(carrierValid))
+        rewriter
+          .create<pypto::ReshapeOp>(loc, pyptoExtentType(convertedResult, ValueRange(*extents)), result,
+                                    mapped(rewriter, ValueRange(*extents)), mapped(rewriter, ValueRange(carrierValid)))
           .getResult();
     }
   }
@@ -3529,7 +3776,7 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
     }
 
     Location loc = op.getLoc();
-    Type convertedResult = op->getResult(0).getType();
+    Type convertedResult = pyptoResultType(op->getResult(0));
 
     // The tile's allocated extent: static dims stay in the result type;
     // dynamic dims take their `maxSizes` upper bound (constants fold into
@@ -3548,16 +3795,19 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
     // shape of the siblings its result merges with downstream; a static
     // result spells no extents, so the raise materializes them per axis.
     raiseStaticSiblingPad(op.getResult(), resultType, op.getLoc(), *extents, validExtents, rewriter);
+    convertedResult = pyptoExtentType(convertedResult, *extents);
 
     auto materializeFull = [&](StringRef value) -> Value {
-      Value full =
-        rewriter.create<pypto::TileFullOp>(loc, convertedResult, rewriter.getStringAttr(value), ValueRange(*extents))
-          .getResult();
+      Value full = rewriter
+                     .create<pypto::TileFullOp>(loc, pyptoExtentType(convertedResult, ValueRange(*extents)),
+                                                rewriter.getStringAttr(value), mapped(rewriter, ValueRange(*extents)))
+                     .getResult();
       if (validExtents.empty()) {
         return full;
       }
       return rewriter
-        .create<pypto::ReshapeOp>(loc, convertedResult, full, ValueRange(*extents), ValueRange(validExtents))
+        .create<pypto::ReshapeOp>(loc, pyptoExtentType(convertedResult, *extents), full, ValueRange(*extents),
+                                  ValueRange(validExtents))
         .getResult();
     };
 
@@ -3578,7 +3828,8 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
     } else {
       std::string zero = isa<FloatType>(sourceType) ? "0.0" : "0";
       Value carrier = materializeFull(zero);
-      result = rewriter.create<pypto::AddOp>(loc, convertedResult, carrier, op.getSource()).getResult();
+      result = rewriter.create<pypto::AddOp>(loc, pyptoType(convertedResult), carrier, mapped(rewriter, op.getSource()))
+                 .getResult();
     }
     rewriter.replaceOp(op, result);
     return success();
@@ -3630,6 +3881,9 @@ class TileBroadcastFusionPattern : public OpConversionPattern<npuvector::Broadca
       if (!tile) {
         return rewriter.notifyMatchFailure(op, "every consumer must fuse onto the expand family");
       }
+      if (!isa<pypto::TileType>(mapped(rewriter, tile).getType())) {
+        return rewriter.notifyMatchFailure(op, "expand data producer has not been converted yet");
+      }
       consumers.emplace_back(user, tile);
     }
     if (consumers.empty()) {
@@ -3654,8 +3908,9 @@ class TileBroadcastFusionPattern : public OpConversionPattern<npuvector::Broadca
     // extents instead would degrade into a reshape+slice whose window
     // inference materializes `min(srcValid, bound)`, and the expand's
     // row/column count proof could no longer equate the two sides.
-    Value vec = rewriter.create<pypto::ReshapeOp>(op.getLoc(), lifted->first, op.getSource(),
-                                                  ValueRange(lifted->second), ValueRange());
+    Value vec = rewriter.create<pypto::ReshapeOp>(
+      op.getLoc(), pyptoExtentType(lifted->first, ValueRange(lifted->second)), mapped(rewriter, op.getSource()),
+      mapped(rewriter, ValueRange(lifted->second)), ValueRange());
     for (auto [user, tile] : consumers) {
       // The expand lands at the consumer, not at the broadcast: the
       // tile operand may be defined between the two, and an expand
@@ -3666,6 +3921,47 @@ class TileBroadcastFusionPattern : public OpConversionPattern<npuvector::Broadca
     }
     rewriter.eraseOp(op);
     return success();
+  }
+
+  /// The broadcast may have been materialized before the consumer's data
+  /// producer was converted. Fuse that consumer once its adaptor carries
+  /// the data Tile, using the same view and expand builders as above.
+  static bool tryFuseConsumer(Operation *op, ValueRange operands, ConversionPatternRewriter &rewriter) {
+    if (operands.size() != 2) {
+      return false;
+    }
+    for (unsigned broadcastIndex : {1u, 0u}) {
+      auto broadcast = op->getOperand(broadcastIndex).getDefiningOp<npuvector::BroadcastOp>();
+      if (!broadcast) {
+        continue;
+      }
+      ArrayRef<int64_t> dimension = broadcast.getDimension();
+      bool rowLift = dimension.size() == 1 && dimension[0] == 0;
+      bool colLift = dimension.size() == 1 && dimension[0] == 1;
+      auto srcType = dyn_cast<npuvector::NPUVectorType>(broadcast.getSource().getType());
+      Value tile = fusibleTileOperand(op, broadcast.getResult());
+      auto dataType = dyn_cast<pypto::TileType>(operands[1 - broadcastIndex].getType());
+      auto mappedSrcType = dyn_cast<pypto::TileType>(mapped(rewriter, broadcast.getSource()).getType());
+      if ((!rowLift && !colLift) || !srcType || srcType.getRank() != 1 || !tile || !dataType ||
+          dataType.getRank() != 2 || !mappedSrcType || mappedSrcType.getRank() != 1) {
+        continue;
+      }
+      SmallVector<std::pair<Operation *, Value>> consumers{{op, tile}};
+      if (failed(checkLiftedExtents(rewriter, consumers, rowLift, srcType.getDimSize(0)))) {
+        continue;
+      }
+      FailureOr<std::pair<Type, SmallVector<Value>>> lifted =
+        buildLiftedVector(broadcast, srcType, rowLift, rewriter);
+      if (failed(lifted)) {
+        continue;
+      }
+      Value vec = rewriter.create<pypto::ReshapeOp>(
+        broadcast.getLoc(), pyptoExtentType(lifted->first, ValueRange(lifted->second)),
+        mapped(rewriter, broadcast.getSource()), mapped(rewriter, ValueRange(lifted->second)), ValueRange());
+      rewriter.replaceOp(op, makeExpand(op, rowLift, operands[1 - broadcastIndex], vec, rewriter)->getResults());
+      return true;
+    }
+    return false;
   }
 
  private:
@@ -3699,13 +3995,23 @@ class TileBroadcastFusionPattern : public OpConversionPattern<npuvector::Broadca
   /// resolvable. A static source extent is a valid bound too: PTOAS
   /// allocates every tile at the aligned bound, so the view still
   /// carries the allocated extent, spelled as a constant the emitpy
-  /// lowering renders literally; the IR type stays dynamic so the
-  /// expand's strict row/column count check exempts it.
+  /// lowering renders literally. The target type is static when all
+  /// extents are known and dynamic only for runtime allocation bounds.
   static FailureOr<std::pair<Type, SmallVector<Value>>> buildLiftedVector(npuvector::BroadcastOp op,
                                                                           npuvector::NPUVectorType srcType,
                                                                           bool rowLift,
                                                                           ConversionPatternRewriter &rewriter) {
     Location loc = op.getLoc();
+    // The mapped source already names its physical allocation. Reuse that
+    // shape directly, without inferring padding again from the source IR.
+    if (auto source = dyn_cast<pypto::TileType>(mapped(rewriter, op.getSource()).getType());
+        source && source.getRank() == 1 && !ShapedType::isDynamic(source.getShape()[0])) {
+      Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+      Value extent = rewriter.create<arith::ConstantIndexOp>(loc, source.getShape()[0]);
+      Type vecType = srcType.clone(rowLift ? SmallVector<int64_t>{ShapedType::kDynamic, 1}
+                                          : SmallVector<int64_t>{1, ShapedType::kDynamic});
+      return std::make_pair(vecType, rowLift ? SmallVector<Value>{extent, one} : SmallVector<Value>{one, extent});
+    }
     int64_t srcExtent = srcType.getDimSize(0);
     if (ShapedType::isDynamic(srcExtent)) {
       ValueRange maxSizes = op.getMaxSizes();
@@ -3782,7 +4088,10 @@ class TileBroadcastFusionPattern : public OpConversionPattern<npuvector::Broadca
   static Operation *makeExpand(Operation *user, bool rowLift, Value tile, Value vec,
                                ConversionPatternRewriter &rewriter) {
     Location loc = user->getLoc();
-    Type result = user->getResult(0).getType();
+    tile = mapped(rewriter, tile);
+    vec = mapped(rewriter, vec);
+    auto tileType = cast<pypto::TileType>(tile.getType());
+    Type result = pyptoType(user->getResult(0).getType(), tileType.getShape());
     if (isa<arith::AddFOp, pypto::AddOp>(user)) {
       return rowLift ? rewriter.create<pypto::RowExpandAddOp>(loc, result, tile, vec).getOperation()
                      : rewriter.create<pypto::ColExpandAddOp>(loc, result, tile, vec).getOperation();
@@ -3799,6 +4108,10 @@ class TileBroadcastFusionPattern : public OpConversionPattern<npuvector::Broadca
                    : rewriter.create<pypto::ColExpandDivOp>(loc, result, tile, vec).getOperation();
   }
 };
+
+static bool fuseTileBroadcastConsumer(Operation *op, ValueRange operands, ConversionPatternRewriter &rewriter) {
+  return TileBroadcastFusionPattern::tryFuseConsumer(op, operands, rewriter);
+}
 
 /// Rewrites a rank-1 comparison broadcast into a full-geometry
 /// comparison: `broadcast{dimension = [0]}(cmp %vec, %scalar)` lifts the
@@ -3849,14 +4162,11 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
   /// The reshaped vector names the source tile's allocated extent --
   /// `pl.reshape` conserves physical elements, so the view must match
   /// the padded bound the source's producing read or reduction
-  /// allocated, never the valid extent the result type carries. The IR
-  /// type stays dynamic so the emitpy lowering renders those extents
-  /// literally (a static type would silently print the valid shape
-  /// instead) and the expand's strict row/column count check exempts
-  /// it.
+  /// allocated. The target Tile type records those physical extents,
+  /// independently of the valid region inherited from the source.
   static Value liftOntoCarrier(Location loc, npuvector::NPUVectorType valueTileType, Value carrier, bool rowLift,
                                Value tile, ConversionPatternRewriter &rewriter) {
-    auto tileType = cast<npuvector::NPUVectorType>(tile.getType());
+    auto tileType = cast<ShapedType>(tile.getType());
     unsigned elemBytes = tileType.getElementType().getIntOrFloatBitWidth() / 8;
     int64_t bound = tileType.getDimSize(0);
     if (auto shape = tileAllocationShape(tile); shape && shape->size() == 1 && !ShapedType::isDynamic((*shape)[0])) {
@@ -3877,11 +4187,18 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
       vecExtents.push_back(one);
       vecExtents.push_back(extent);
     }
-    Value vec = rewriter.create<pypto::ReshapeOp>(loc, vecType, tile, ValueRange(vecExtents), ValueRange());
+    Value vec =
+      rewriter.create<pypto::ReshapeOp>(loc, pyptoExtentType(vecType, ValueRange(vecExtents)), mapped(rewriter, tile),
+                                        mapped(rewriter, ValueRange(vecExtents)), ValueRange());
+    // The carrier type names the padded allocation; its reshape keeps the
+    // smaller logical valid region independently of this result type.
+    Type resultType = pyptoType(valueTileType, cast<pypto::TileType>(carrier.getType()).getShape());
     if (rowLift) {
-      return rewriter.create<pypto::RowExpandAddOp>(loc, valueTileType, carrier, vec).getResult();
+      return rewriter.create<pypto::RowExpandAddOp>(loc, resultType, carrier, mapped(rewriter, vec))
+        .getResult();
     }
-    return rewriter.create<pypto::ColExpandAddOp>(loc, valueTileType, carrier, vec).getResult();
+    return rewriter.create<pypto::ColExpandAddOp>(loc, resultType, carrier, mapped(rewriter, vec))
+      .getResult();
   }
 
   /// The aligned bound each result axis allocates (the comparison tile's
@@ -3975,9 +4292,11 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
     collectBroadcastSiblingBounds(op, rank, siblingBounds);
     SmallVector<Value> carrierExtents =
       cmpCarrierExtents(resultType, lhsType, cmpLhs, rowLift, loc, pads, siblingBounds, rewriter);
-    Value carrier = rewriter.create<pypto::TileFullOp>(loc, valueTileType, rewriter.getStringAttr(zero),
-                                                       ValueRange(carrierExtents))
-                        .getResult();
+    Value carrier =
+      rewriter
+        .create<pypto::TileFullOp>(loc, pyptoExtentType(valueTileType, ValueRange(carrierExtents)),
+                                   rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(carrierExtents)))
+        .getResult();
     // The carrier allocates the padded sibling shape while valueTileType
     // names the valid contract; re-view it back down to that valid region:
     // the expand preserves the target tile's valid shape, tile.cmps packs
@@ -3988,9 +4307,11 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
     SmallVector<Value> carrierValid;
     std::transform(resultType.getShape().begin(), resultType.getShape().end(), std::back_inserter(carrierValid),
                    [&](int64_t dim) { return rewriter.create<arith::ConstantIndexOp>(loc, dim); });
-    carrier = rewriter.create<pypto::ReshapeOp>(loc, valueTileType, carrier, ValueRange(carrierExtents),
-                                                ValueRange(carrierValid))
-                  .getResult();
+    carrier = rewriter
+                .create<pypto::ReshapeOp>(loc, pyptoExtentType(valueTileType, ValueRange(carrierExtents)), carrier,
+                                          mapped(rewriter, ValueRange(carrierExtents)),
+                                          mapped(rewriter, ValueRange(carrierValid)))
+                .getResult();
     Value liftedLhs = liftOntoCarrier(loc, valueTileType, carrier, rowLift, cmpLhs, rewriter);
     // A scalar rhs re-rides the tile-scalar comparison; a tile rhs lifts.
     // A rhs that merely broadcasts a scalar passes through to that
@@ -3999,14 +4320,16 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
     // first.
     Value finalRhs = cmpRhs;
     if (auto rhsBroadcast = cmpRhs.getDefiningOp<npuvector::BroadcastOp>()) {
-      if (!isa<VectorType, npuvector::NPUVectorType>(rhsBroadcast.getSource().getType())) {
+      if (!isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(rhsBroadcast.getSource().getType())) {
         finalRhs = rhsBroadcast.getSource();
       }
     }
-    if (isa<VectorType, npuvector::NPUVectorType>(finalRhs.getType())) {
+    if (isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(finalRhs.getType())) {
       finalRhs = liftOntoCarrier(loc, valueTileType, carrier, rowLift, finalRhs, rewriter);
     }
-    Value mask = rewriter.create<pypto::CmpOp>(loc, op->getResult(0).getType(), *predicate, liftedLhs, finalRhs);
+    Type maskType = pyptoType(op->getResult(0).getType(), cast<pypto::TileType>(liftedLhs.getType()).getShape());
+    Value mask = rewriter.create<pypto::CmpOp>(loc, maskType, *predicate,
+                                               mapped(rewriter, liftedLhs), mapped(rewriter, finalRhs));
     replaceWithPackedMask(op, mask, rewriter);
     return success();
   }
@@ -4184,16 +4507,21 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
   /// the mask rewriter), binary arith swaps into the runtime's
   /// tile-first form, clamps map onto the tile-scalar TMAXS/TMINS forms,
   /// and selects take the scalar on the broadcast's branch.
-  static void rewriteFusedUser(Operation *user, Value scalar, Value bcast, ConversionPatternRewriter &rewriter) {
+  static void rewriteFusedUser(Operation *user, Value scalar, Value bcast, ConversionPatternRewriter &rewriter,
+                               ValueRange operands = {}) {
     if (auto cmp = dyn_cast<npuvector::CmpIOp>(user)) {
       auto code = cmpTypeCodeFor(cmp.getPredicate());
-      Value mask = rewriter.create<pypto::CmpOp>(cmp.getLoc(), cmp->getResult(0).getType(),
-                                                 static_cast<pypto::CmpPredicate>(*code), cmp.getLhs(), scalar);
+      SmallVector<Value> mappedOperands{mapped(rewriter, cmp.getLhs()), mapped(rewriter, scalar)};
+      Value mask = rewriter.create<pypto::CmpOp>(cmp.getLoc(), pyptoResultTypes(cmp, mappedOperands).front(),
+                                                 static_cast<pypto::CmpPredicate>(*code),
+                                                 mappedOperands[0], mappedOperands[1]);
       replaceWithPackedMask(cmp, mask, rewriter);
     } else if (auto cmp = dyn_cast<npuvector::CmpFOp>(user)) {
       auto code = cmpTypeCodeFor(cmp.getPredicate());
-      Value mask = rewriter.create<pypto::CmpOp>(cmp.getLoc(), cmp->getResult(0).getType(),
-                                                 static_cast<pypto::CmpPredicate>(*code), cmp.getLhs(), scalar);
+      SmallVector<Value> mappedOperands{mapped(rewriter, cmp.getLhs()), mapped(rewriter, scalar)};
+      Value mask = rewriter.create<pypto::CmpOp>(cmp.getLoc(), pyptoResultTypes(cmp, mappedOperands).front(),
+                                                 static_cast<pypto::CmpPredicate>(*code),
+                                                 mappedOperands[0], mappedOperands[1]);
       replaceWithPackedMask(cmp, mask, rewriter);
     } else if (isFusableArithBinary(user)) {
       // `tile OP scalar`: the broadcast sits on the rhs, or (commutative
@@ -4201,7 +4529,8 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
       // tile-first form.
       Value tile = user->getOperand(1) == bcast ? user->getOperand(0) : user->getOperand(1);
       if (isa<arith::AddFOp, arith::AddIOp>(user)) {
-        rewriter.replaceOpWithNewOp<pypto::AddOp>(user, user->getResultTypes(), tile, scalar);
+        rewriter.replaceOpWithNewOp<pypto::AddOp>(user, pyptoResultTypes(user, operands), mapped(rewriter, tile),
+                                                  mapped(rewriter, scalar));
       } else if (isa<arith::SubFOp, arith::SubIOp>(user)) {
         if (user->getOperand(0) == bcast) {
           // `scalar - tile`: the runtime's `pl.sub` is tile-first, so
@@ -4209,13 +4538,16 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
           // negation preserves the tile's own shape and the
           // tile-scalar add keeps it, so the pair needs no shape
           // contract on the materialized broadcast.
-          Value neg = rewriter.create<pypto::NegOp>(user->getLoc(), user->getResultTypes(), tile);
-          rewriter.replaceOpWithNewOp<pypto::AddOp>(user, user->getResultTypes(), neg, scalar);
+          SmallVector<Type> resultTypes = pyptoResultTypes(user, operands);
+          Value neg = rewriter.create<pypto::NegOp>(user->getLoc(), resultTypes, mapped(rewriter, tile));
+          rewriter.replaceOpWithNewOp<pypto::AddOp>(user, resultTypes, neg, mapped(rewriter, scalar));
         } else {
-          rewriter.replaceOpWithNewOp<pypto::SubOp>(user, user->getResultTypes(), tile, scalar);
+          rewriter.replaceOpWithNewOp<pypto::SubOp>(user, pyptoResultTypes(user, operands), mapped(rewriter, tile),
+                                                    mapped(rewriter, scalar));
         }
       } else if (isa<arith::MulFOp, arith::MulIOp>(user)) {
-        rewriter.replaceOpWithNewOp<pypto::MulOp>(user, user->getResultTypes(), tile, scalar);
+        rewriter.replaceOpWithNewOp<pypto::MulOp>(user, pyptoResultTypes(user, operands), mapped(rewriter, tile),
+                                                  mapped(rewriter, scalar));
       } else if (isa<arith::DivFOp>(user) && user->getOperand(0) == bcast) {
         // `scalar / tile`: `pl.div` demands src0/src1/dst share one
         // valid shape, but a materialized broadcast carries the
@@ -4223,10 +4555,12 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
         // extent. `pl.recip` preserves the tile's own shape and the
         // tile-scalar mul keeps it, so the pair spells the quotient
         // without any shape contract.
-        Value recip = rewriter.create<pypto::RecipOp>(user->getLoc(), user->getResultTypes(), tile);
-        rewriter.replaceOpWithNewOp<pypto::MulOp>(user, user->getResultTypes(), recip, scalar);
+        SmallVector<Type> resultTypes = pyptoResultTypes(user, operands);
+        Value recip = rewriter.create<pypto::RecipOp>(user->getLoc(), resultTypes, mapped(rewriter, tile));
+        rewriter.replaceOpWithNewOp<pypto::MulOp>(user, resultTypes, recip, mapped(rewriter, scalar));
       } else {
-        rewriter.replaceOpWithNewOp<pypto::DivOp>(user, user->getResultTypes(), tile, scalar);
+        rewriter.replaceOpWithNewOp<pypto::DivOp>(user, pyptoResultTypes(user, operands), mapped(rewriter, tile),
+                                                  mapped(rewriter, scalar));
       }
     } else if (isFusableClampBinary(user)) {
       // `min/max(tile, scalar)`: the runtime's TMAXS/TMINS take the
@@ -4235,25 +4569,28 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
       // so the broadcast may sit on either side.
       Value tile = user->getOperand(1) == bcast ? user->getOperand(0) : user->getOperand(1);
       if (isa<arith::MaximumFOp>(user)) {
-        rewriter.replaceOpWithNewOp<pypto::MaximumsOp>(user, user->getResultTypes(), tile, scalar);
+        rewriter.replaceOpWithNewOp<pypto::MaximumsOp>(user, pyptoResultTypes(user, operands), mapped(rewriter, tile),
+                                                       mapped(rewriter, scalar));
       } else {
-        rewriter.replaceOpWithNewOp<pypto::MinimumsOp>(user, user->getResultTypes(), tile, scalar);
+        rewriter.replaceOpWithNewOp<pypto::MinimumsOp>(user, pyptoResultTypes(user, operands), mapped(rewriter, tile),
+                                                       mapped(rewriter, scalar));
       }
     } else {
       auto select = cast<npuvector::SelectOp>(user);
       bool trueIsBcast = select.getTrueValue() == bcast;
-      rewriter.replaceOpWithNewOp<pypto::SelectOp>(select, select->getResult(0).getType(), select.getCondition(),
-                                                   trueIsBcast ? scalar : select.getTrueValue(),
-                                                   trueIsBcast ? select.getFalseValue() : scalar);
+      SmallVector<Value> mappedOperands{mapped(rewriter, trueIsBcast ? select.getFalseValue() : select.getTrueValue()),
+                                          mapped(rewriter, scalar)};
+      rewriter.replaceOpWithNewOp<pypto::SelectOp>(select, pyptoResultTypes(select, mappedOperands).front(),
+                                                   mapped(rewriter, select.getCondition()),
+                                                   mapped(rewriter, trueIsBcast ? scalar : select.getTrueValue()),
+                                                   mapped(rewriter, trueIsBcast ? select.getFalseValue() : scalar));
     }
   }
 
   LogicalResult matchAndRewrite(npuvector::BroadcastOp op, npuvector::BroadcastOp::Adaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
-    // NPUVectorType only implements ShapedTypeInterface — it is not a
-    // ShapedType subclass — so tile-ness must be probed through the
-    // concrete pair like the conversion target's legality lambda does.
-    auto isTileType = [](Type type) { return isa<VectorType, npuvector::NPUVectorType>(type); };
+    // Both source vector forms and already-converted Tiles can feed fusion.
+    auto isTileType = [](Type type) { return isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(type); };
     if (isTileType(op.getSource().getType())) {
       return rewriter.notifyMatchFailure(op,
                                          "scalar fusion needs a scalar "
@@ -4272,6 +4609,21 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
         !isLiteralScalar(op.getSource())) {
       return rewriter.notifyMatchFailure(op, "select fusion needs a literal scalar with a PyPTO dtype");
     }
+    for (Operation *user : users) {
+      for (Value operand : user->getOperands()) {
+        if (operand == op.getResult() || llvm::is_contained(users, operand.getDefiningOp())) {
+          continue;
+        }
+        if (isa<npuvector::NPUVectorType>(mapped(rewriter, operand).getType())) {
+          return rewriter.notifyMatchFailure(op, "fusion data producer has not been converted yet");
+        }
+      }
+    }
+    // A select may consume a comparison that uses the same broadcast.
+    // Rewrite that producer first so the select receives its mapped Tile.
+    if (!computeTopologicalSorting(users)) {
+      return rewriter.notifyMatchFailure(op, "broadcast consumers have cyclic dependencies");
+    }
     // Rewrite phase: swap each consumer onto the scalar form in place,
     // then drop the broadcast. New ops are built at the consumer's own
     // position — the driver's insertion point stays at the broadcast, so
@@ -4287,6 +4639,59 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
     return success();
   }
 };
+
+/// Every comparison/select consumer must accept the same scalar fusion.
+static bool scalarBroadcastUsersAreFusible(npuvector::BroadcastOp broadcast) {
+  auto isTileType = [](Type type) { return isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(type); };
+  if (llvm::any_of(broadcast->getUsers(), [&](Operation *user) {
+        return !ScalarBroadcastFusionPattern::isFusibleUser(user, broadcast.getResult(), isTileType);
+      })) {
+    return false;
+  }
+  return !llvm::any_of(broadcast->getUsers(), [](Operation *user) { return isa<npuvector::SelectOp>(user); }) ||
+         ScalarBroadcastFusionPattern::isLiteralScalar(broadcast.getSource());
+}
+
+static bool hasScalarBroadcastConsumerForm(Operation *op, size_t operandCount) {
+  if (isa<npuvector::SelectOp>(op)) {
+    return operandCount == 3;
+  }
+  return operandCount == 2 &&
+         (isa<npuvector::CmpIOp, npuvector::CmpFOp>(op) || ScalarBroadcastFusionPattern::isFusableArithBinary(op) ||
+          ScalarBroadcastFusionPattern::isFusableClampBinary(op));
+}
+
+/// A broadcast may precede the data producer, so its producer-side fusion
+/// cannot yet construct the converted Tile. Reuse the same scalar rewrite
+/// at the consumer once its mapped data Tile is available.
+static bool fuseScalarBroadcastConsumer(Operation *op, ValueRange operands, ConversionPatternRewriter &rewriter) {
+  bool select = isa<npuvector::SelectOp>(op);
+  bool comparison = isa<npuvector::CmpIOp, npuvector::CmpFOp>(op);
+  if (!hasScalarBroadcastConsumerForm(op, operands.size())) {
+    return false;
+  }
+  auto isTileType = [](Type type) { return isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(type); };
+  SmallVector<unsigned> scalarIndices = select ? SmallVector<unsigned>{1u, 2u} : SmallVector<unsigned>{1u, 0u};
+  for (unsigned scalarIndex : scalarIndices) {
+    auto broadcast = op->getOperand(scalarIndex).getDefiningOp<npuvector::BroadcastOp>();
+    unsigned tileIndex = select ? 3 - scalarIndex : 1 - scalarIndex;
+    if (!broadcast || isTileType(broadcast.getSource().getType()) ||
+        !isa<pypto::TileType>(operands[tileIndex].getType()) ||
+        (select && (!isa<pypto::TileType>(operands[0].getType()) ||
+                    !ScalarBroadcastFusionPattern::isLiteralScalar(broadcast.getSource()))) ||
+        !ScalarBroadcastFusionPattern::isFusibleUser(op, broadcast.getResult(), isTileType)) {
+      continue;
+    }
+    if ((select || comparison) && !scalarBroadcastUsersAreFusible(broadcast)) {
+      continue;
+    }
+    SmallVector<Value> fusedOperands{operands[tileIndex], mapped(rewriter, broadcast.getSource())};
+    ScalarBroadcastFusionPattern::rewriteFusedUser(op, broadcast.getSource(), broadcast.getResult(), rewriter,
+                                                  fusedOperands);
+    return true;
+  }
+  return false;
+}
 
 /// Rewrites a transpose into `pypto.transpose`: PyPTO swaps exactly
 /// two axes, so the permutation must be a single transposition (or the
@@ -4320,12 +4725,18 @@ class TransposePattern : public OpConversionPattern<TransposeOp> {
     }
     if (!swap) {
       // Identity permutation: the value passes through unchanged.
-      rewriter.replaceOp(op, op.getVector());
+      rewriter.replaceOp(op, adaptor.getVector());
       return success();
     }
-    rewriter.replaceOpWithNewOp<pypto::TransposeOp>(op, op->getResult(0).getType(), op.getVector(),
-                                                    static_cast<uint64_t>(swap->first),
-                                                    static_cast<uint64_t>(swap->second));
+    Type resultType = pyptoType(op->getResult(0).getType());
+    if (isa<npuvector::NPUVectorType>(op->getResult(0).getType())) {
+      auto source = cast<ShapedType>(adaptor.getVector().getType());
+      SmallVector<int64_t> shape(source.getShape());
+      std::swap(shape[swap->first], shape[swap->second]);
+      resultType = pyptoType(resultType, shape);
+    }
+    rewriter.replaceOpWithNewOp<pypto::TransposeOp>(
+      op, resultType, adaptor.getVector(), static_cast<uint64_t>(swap->first), static_cast<uint64_t>(swap->second));
     return success();
   }
 };
@@ -4358,7 +4769,9 @@ static Value materializeSelectBranch(Value branch, bool staticShape, Type conver
   if (!text) {
     return Value();
   }
-  return rewriter.create<pypto::TileFullOp>(loc, convertedResult, rewriter.getStringAttr(*text), ValueRange{})
+  return rewriter
+    .create<pypto::TileFullOp>(loc, pyptoExtentType(convertedResult, ValueRange{}), rewriter.getStringAttr(*text),
+                               ValueRange{})
     .getResult();
 }
 
@@ -4378,9 +4791,11 @@ static Value padSelectBranchFull(pypto::TileFullOp full, int64_t paddedCols, Arr
     extents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, allocation));
     validExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, validShape[axis]));
   }
-  auto paddedFull = rewriter.create<pypto::TileFullOp>(loc, convertedResult, full.getValue(), ValueRange(extents));
-  return rewriter.create<pypto::ReshapeOp>(loc, convertedResult, paddedFull, ValueRange(extents),
-                                           ValueRange(validExtents));
+  auto paddedFull = rewriter.create<pypto::TileFullOp>(loc, pyptoExtentType(convertedResult, ValueRange(extents)),
+                                                       full.getValue(), mapped(rewriter, ValueRange(extents)));
+  return rewriter.create<pypto::ReshapeOp>(loc, pyptoExtentType(convertedResult, ValueRange(extents)), paddedFull,
+                                           mapped(rewriter, ValueRange(extents)),
+                                           mapped(rewriter, ValueRange(validExtents)));
 }
 
 /// Rewrites a select into `pypto.select`: the runtime's composite
@@ -4388,7 +4803,7 @@ static Value padSelectBranchFull(pypto::TileFullOp full, int64_t paddedCols, Arr
 /// no scratch is materialized here and dynamic result shapes are legal.
 /// Constant scalar branches are materialized as `pypto.tile_full` (which
 /// needs static shapes, since the extents would otherwise be unknown);
-/// tile branches keep the source shaped type. Scalar selects (e.g. the
+/// tile branches use their mapped target values. Scalar selects (e.g. the
 /// branchless floordiv chain left by the built-in affine lowering) keep
 /// the arith op; convert-pypto-to-emitpy lowers it onto the `select`
 /// pseudo-callee, which the translator prints as a Python conditional
@@ -4420,9 +4835,20 @@ class SelectPattern : public OpConversionPattern<SelectOp> {
     if (!isa<ShapedType>(op.getCondition().getType())) {
       return rewriter.notifyMatchFailure(op, "condition must be a tile");
     }
+    if (fuseScalarBroadcastConsumer(op, adaptor.getOperands(), rewriter)) {
+      return success();
+    }
 
     Location loc = op.getLoc();
-    Type convertedResult = op->getResult(0).getType();
+    Type convertedResult = pyptoResultType(op->getResult(0));
+    // Converted data branches carry the physical shape; the source graph
+    // may still describe a smaller logical allocation.
+    for (Value branch : adaptor.getOperands().drop_front()) {
+      if (auto tile = dyn_cast<pypto::TileType>(branch.getType())) {
+        convertedResult = pyptoType(convertedResult, tile.getShape());
+        break;
+      }
+    }
     bool staticShape = resultType.hasStaticShape();
 
     Value trueBranch = materializeSelectBranch(op.getTrueValue(), staticShape, convertedResult, loc, rewriter);
@@ -4461,10 +4887,10 @@ class SelectPattern : public OpConversionPattern<SelectOp> {
       }
     }
 
-    // The select keeps the source result type so the conversion never
-    // materializes casts; convert-pypto-to-emitpy lowers it into the
-    // positional `pl.tile.select` composite call.
-    rewriter.replaceOpWithNewOp<pypto::SelectOp>(op, convertedResult, op.getCondition(), trueBranch, falseBranch);
+    // The target result carries the physical allocation, while branch
+    // views retain the valid region for the positional select call.
+    rewriter.replaceOpWithNewOp<pypto::SelectOp>(op, pyptoType(convertedResult), mapped(rewriter, op.getCondition()),
+                                                 mapped(rewriter, trueBranch), mapped(rewriter, falseBranch));
     return success();
   }
 };
@@ -4484,14 +4910,10 @@ class CollapseShapePattern : public OpConversionPattern<memref::CollapseShapeOp>
     if (!resultType || !resultType.hasStaticShape()) {
       return rewriter.notifyMatchFailure(op, "only statically shaped collapse views are supported");
     }
-    // The replacement keeps the original result type: the type converter is
-    // the identity, so a type-changing replacement would demand a
-    // materialization at already-converted users (e.g. a live `pl.load`) and
-    // abort the full conversion. The raw source operand is used on purpose:
-    // signature rewriting happens by hand after the conversion, so the
-    // memref stays as-is.
-    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getResult().getType(), op.getSrc(), ValueRange(),
-                                                  ValueRange());
+    // This is a Tensor view, so its memref result remains until the
+    // downstream pass emits the Tensor annotation.
+    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, pyptoExtentType(op.getResult().getType(), ValueRange()),
+                                                  mapped(rewriter, op.getSrc()), ValueRange(), ValueRange());
     return success();
   }
 };
@@ -4510,8 +4932,8 @@ class ExpandShapePattern : public OpConversionPattern<memref::ExpandShapeOp> {
     }
     // Same materialization constraints as the collapse handling: the
     // replacement keeps the original result type.
-    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getResult().getType(), op.getSrc(), ValueRange(),
-                                                  ValueRange());
+    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, pyptoExtentType(op.getResult().getType(), ValueRange()),
+                                                  mapped(rewriter, op.getSrc()), ValueRange(), ValueRange());
     return success();
   }
 };
@@ -4556,8 +4978,8 @@ class MemrefTransposePattern : public OpConversionPattern<memref::TransposeOp> {
       rewriter.replaceOp(op, op.getIn());
       return success();
     }
-    rewriter.replaceOpWithNewOp<pypto::TransposeOp>(op, op.getResult().getType(), op.getIn(),
-                                                    static_cast<uint64_t>(swap->first),
+    rewriter.replaceOpWithNewOp<pypto::TransposeOp>(op, pyptoType(op.getResult().getType()),
+                                                    mapped(rewriter, op.getIn()), static_cast<uint64_t>(swap->first),
                                                     static_cast<uint64_t>(swap->second));
     return success();
   }
@@ -4579,8 +5001,8 @@ class ReshapePattern : public OpConversionPattern<memref::ReshapeOp> {
     }
     // Same materialization constraints as the collapse handling: the
     // replacement keeps the original result type.
-    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, op.getResult().getType(), op.getSource(), ValueRange(),
-                                                  ValueRange());
+    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, pyptoExtentType(op.getResult().getType(), ValueRange()),
+                                                  mapped(rewriter, op.getSource()), ValueRange(), ValueRange());
     return success();
   }
 };
@@ -4821,7 +5243,7 @@ class ExtractSlicePattern : public OpConversionPattern<npuvector::ExtractSliceOp
     if (!droppedDims.empty()) {
       dropDimsAttr = rewriter.getDenseI64ArrayAttr(llvm::to_vector_of<int64_t>(droppedDims));
     }
-    rewriter.replaceOpWithNewOp<pypto::SliceOp>(op, op.getResult().getType(), op.getSource(), window,
+    rewriter.replaceOpWithNewOp<pypto::SliceOp>(op, pyptoResultType(op.getResult()), adaptor.getSource(), window,
                                                 adaptor.getOffsets(), dropDimsAttr);
     return success();
   }
@@ -4964,7 +5386,8 @@ class ScfForPattern : public OpConversionPattern<scf::ForOp> {
     if (!yield || yield.getNumOperands() != 0) {
       return rewriter.notifyMatchFailure(op, "unexpected loop terminator");
     }
-    auto loop = rewriter.create<pypto::RangeOp>(op.getLoc(), op.getLowerBound(), op.getUpperBound(), op.getStep());
+    auto loop = rewriter.create<pypto::RangeOp>(op.getLoc(), mapped(rewriter, op.getLowerBound()),
+                                                mapped(rewriter, op.getUpperBound()), mapped(rewriter, op.getStep()));
     rewriter.inlineRegionBefore(op.getRegion(), loop.getBody(), loop.getBody().end());
     rewriter.eraseOp(yield);
     rewriter.replaceOp(op, loop);
@@ -5606,7 +6029,7 @@ static void liftScalarCmpSelects(func::FuncOp funcOp) {
       return;  // an opaque scalar condition has no tile spelling
     }
     if (llvm::any_of(cmp->getOperands(), [](Value operand) {
-          return isa<VectorType, npuvector::NPUVectorType>(operand.getType());
+          return isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(operand.getType());
         })) {
       return;
     }
@@ -5619,7 +6042,8 @@ static void liftScalarCmpSelects(func::FuncOp funcOp) {
     // time constants. The comparison's lhs rides a broadcast (carrier
     // tile plus add), so any scalar value works there.
     for (Value operand : cmp->getOperands()) {
-      if (operand == cmp->getOperand(0) || isa<VectorType, npuvector::NPUVectorType>(operand.getType())) {
+      if (operand == cmp->getOperand(0) ||
+          isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(operand.getType())) {
         continue;
       }
       if (!operand.getDefiningOp<arith::ConstantOp>()) {
@@ -5627,7 +6051,8 @@ static void liftScalarCmpSelects(func::FuncOp funcOp) {
       }
     }
     for (Value operand : sel->getOperands()) {
-      if (operand == sel.getCondition() || isa<VectorType, npuvector::NPUVectorType>(operand.getType())) {
+      if (operand == sel.getCondition() ||
+          isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(operand.getType())) {
         continue;
       }
       if (!operand.getDefiningOp<arith::ConstantOp>()) {
@@ -6059,11 +6484,10 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
 
     VectorToPyptoTypeConverter typeConverter(ctx);
     ConversionTarget target(*ctx);
-    // The patterns emit typed pypto ops that keep the source result types;
-    // pypto is the output dialect of this pass, and the downstream
-    // convert-pypto-to-emitpy pass lowers it to the emitpy call forms.
-    // Nothing in this stage may produce emitpy ops.
-    target.addLegalDialect<pypto::PyptoDialect>();
+    // Patterns create both the target operations and their physical Tile types.
+    target.addDynamicallyLegalDialect<pypto::PyptoDialect>([](Operation *op) {
+      return llvm::none_of(op->getResultTypes(), [](Type type) { return isa<npuvector::NPUVectorType>(type); });
+    });
     target
       .addIllegalDialect<npuvector::NPUVectorDialect, vector::VectorDialect, arith::ArithDialect, math::MathDialect>();
     // Scalar arithmetic keeps the arith op: pypto is a tile dialect, so
@@ -6076,14 +6500,17 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
     target.addDynamicallyLegalOp<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp, arith::AddFOp,
                                  arith::SubFOp, arith::MulFOp, arith::DivFOp, arith::CmpIOp, arith::CmpFOp,
                                  arith::SelectOp, arith::FloorDivSIOp, arith::RemSIOp, arith::RemUIOp, arith::NegFOp>(
-      [](Operation *op) { return !isa<VectorType, npuvector::NPUVectorType>(op->getOperand(0).getType()); });
+      [](Operation *op) {
+        return !isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(op->getOperand(0).getType());
+      });
     // Scalar float math keeps the math op the same way: `pl.sqrt`/`pl.rsqrt`
     // are Tensor/Tile-only APIs, so scalar square roots (e.g. the batch-norm
     // scale computation) wait for stage two, which maps them onto
     // pseudo-callees the translator lowers through a small tile detour
     // (the scalar `** 0.5` power form is numerically wrong on the backend).
-    target.addDynamicallyLegalOp<math::SqrtOp, math::RsqrtOp, math::ExpOp, math::LogOp>(
-      [](Operation *op) { return !isa<VectorType, npuvector::NPUVectorType>(op->getOperand(0).getType()); });
+    target.addDynamicallyLegalOp<math::SqrtOp, math::RsqrtOp, math::ExpOp, math::LogOp>([](Operation *op) {
+      return !isa<VectorType, npuvector::NPUVectorType, pypto::TileType>(op->getOperand(0).getType());
+    });
     // Control flow becomes pypto here: scf.parallel/scf.forall map onto
     // `pypto.spmd` multi-core launches and scf.for onto the `pypto.range`
     // per-core tile loop.
@@ -6095,13 +6522,13 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
     target.addIllegalOp<memref::AllocOp, memref::AllocaOp, memref::DeallocOp, memref::LoadOp, memref::StoreOp,
                         memref::CollapseShapeOp, memref::ExpandShapeOp, memref::TransposeOp, memref::ReshapeOp,
                         memref::SubViewOp, memref::ReinterpretCastOp>();
-    // The signature itself stays untouched by the conversion: retyping
-    // parameters through the framework would materialize
-    // unrealized_conversion_cast ops that a full conversion rejects. The
-    // signature and block arguments are rewritten by hand in the downstream
-    // convert-pypto-to-emitpy pass, once the body is fully converted.
-    // Returns were emptied by the pre-pass rewrite and calls are left as-is.
-    target.addLegalOp<func::FuncOp, func::ReturnOp, func::CallOp>();
+    // Convert function parameters and calls at the dialect boundary.
+    // Tensor views retain memref types until the downstream annotation pass;
+    // returns were emptied by the output-parameter rewrite.
+    target.addDynamicallyLegalOp<func::FuncOp>(
+      [&](func::FuncOp op) { return typeConverter.isSignatureLegal(op.getFunctionType()); });
+    target.addLegalOp<func::ReturnOp>();
+    target.addDynamicallyLegalOp<func::CallOp>([&](func::CallOp op) { return typeConverter.isLegal(op); });
 
     RewritePatternSet patterns(ctx);
     vector_to_pypto::populateVectorToPyptoConversionPatterns(patterns, typeConverter);
@@ -6145,92 +6572,92 @@ namespace vector_to_pypto {
 namespace {
 
 /// Constants and elementwise float arithmetic.
-static void populateFloatArithPatterns(RewritePatternSet &patterns, TypeConverter &typeConverter) {
+static void populateFloatArithPatterns(RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
 
   // Constants.
-  patterns.add<ArithConstantPattern>(typeConverter, ctx);
+  patterns.add<ArithConstantPattern>(ctx);
 
   // Elementwise float arithmetic.
-  patterns.add<OpToPyptoOpPattern<arith::AddFOp, pypto::AddOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::SubFOp, pypto::SubOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::MulFOp, pypto::MulOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::DivFOp, pypto::DivOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::RemFOp, pypto::FmodOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::MaximumFOp, pypto::MaximumOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::MinimumFOp, pypto::MinimumOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::NegFOp, pypto::NegOp>>(typeConverter, ctx);
+  patterns.add<OpToPyptoOpPattern<arith::AddFOp, pypto::AddOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::SubFOp, pypto::SubOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::MulFOp, pypto::MulOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::DivFOp, pypto::DivOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::RemFOp, pypto::FmodOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::MaximumFOp, pypto::MaximumOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::MinimumFOp, pypto::MinimumOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::NegFOp, pypto::NegOp>>(ctx);
 }
 
 /// Elementwise integer arithmetic.
-static void populateIntArithPatterns(RewritePatternSet &patterns, TypeConverter &typeConverter) {
+static void populateIntArithPatterns(RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
 
   // Elementwise integer arithmetic.
-  patterns.add<OpToPyptoOpPattern<arith::AddIOp, pypto::AddOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::SubIOp, pypto::SubOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::MulIOp, pypto::MulOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::DivSIOp, pypto::DivOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::DivUIOp, pypto::DivOp>>(typeConverter, ctx);
-  patterns.add<TileRemToPyptoPattern<arith::RemSIOp>>(typeConverter, ctx);
-  patterns.add<TileRemToPyptoPattern<arith::RemUIOp>>(typeConverter, ctx);
-  patterns.add<MinMaxToPyptoPattern<arith::MaxSIOp, pypto::MaxOp, pypto::MaximumOp>>(typeConverter, ctx);
-  patterns.add<MinMaxToPyptoPattern<arith::MinSIOp, pypto::MinOp, pypto::MinimumOp>>(typeConverter, ctx);
+  patterns.add<OpToPyptoOpPattern<arith::AddIOp, pypto::AddOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::SubIOp, pypto::SubOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::MulIOp, pypto::MulOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::DivSIOp, pypto::DivOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::DivUIOp, pypto::DivOp>>(ctx);
+  patterns.add<TileRemToPyptoPattern<arith::RemSIOp>>(ctx);
+  patterns.add<TileRemToPyptoPattern<arith::RemUIOp>>(ctx);
+  patterns.add<MinMaxToPyptoPattern<arith::MaxSIOp, pypto::MaxOp, pypto::MaximumOp>>(ctx);
+  patterns.add<MinMaxToPyptoPattern<arith::MinSIOp, pypto::MinOp, pypto::MinimumOp>>(ctx);
   // Floor division stays arith.floordivsi here: the translator prints the
   // `floordivsi` pseudo-callee it lowers to as an infix `(a // b)`
   // expression, and convert-pypto-to-emitpy introduces that call.
-  patterns.add<OpToPyptoOpPattern<arith::MaxUIOp, pypto::MaximumOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::MinUIOp, pypto::MinimumOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::AndIOp, pypto::AndOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::OrIOp, pypto::OrOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::XOrIOp, pypto::XorOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::ShLIOp, pypto::ShlOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::ShRSIOp, pypto::ShrOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<arith::ShRUIOp, pypto::ShrOp>>(typeConverter, ctx);
+  patterns.add<OpToPyptoOpPattern<arith::MaxUIOp, pypto::MaximumOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::MinUIOp, pypto::MinimumOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::AndIOp, pypto::AndOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::OrIOp, pypto::OrOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::XOrIOp, pypto::XorOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::ShLIOp, pypto::ShlOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::ShRSIOp, pypto::ShrOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<arith::ShRUIOp, pypto::ShrOp>>(ctx);
 }
 
 /// Comparisons and select.
-static void populateCmpSelectPatterns(RewritePatternSet &patterns, TypeConverter &typeConverter) {
+static void populateCmpSelectPatterns(RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
 
   // Comparisons and select.
-  patterns.add<CmpToPyptoPattern<arith::CmpIOp>>(typeConverter, ctx);
-  patterns.add<CmpToPyptoPattern<arith::CmpFOp>>(typeConverter, ctx);
-  patterns.add<CmpToPyptoPattern<npuvector::CmpIOp>>(typeConverter, ctx);
-  patterns.add<CmpToPyptoPattern<npuvector::CmpFOp>>(typeConverter, ctx);
-  patterns.add<SelectPattern<arith::SelectOp>>(typeConverter, ctx);
-  patterns.add<SelectPattern<npuvector::SelectOp>>(typeConverter, ctx);
+  patterns.add<CmpToPyptoPattern<arith::CmpIOp>>(ctx);
+  patterns.add<CmpToPyptoPattern<arith::CmpFOp>>(ctx);
+  patterns.add<CmpToPyptoPattern<npuvector::CmpIOp>>(ctx);
+  patterns.add<CmpToPyptoPattern<npuvector::CmpFOp>>(ctx);
+  patterns.add<SelectPattern<arith::SelectOp>>(ctx);
+  patterns.add<SelectPattern<npuvector::SelectOp>>(ctx);
 }
 
 /// Numeric casts (pl.cast) and bitcasts (pl.reinterpret_view).
-static void populateCastPatterns(RewritePatternSet &patterns, TypeConverter &typeConverter) {
+static void populateCastPatterns(RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
 
   // Numeric casts -> pl.cast; bitcasts -> pl.reinterpret_view.
-  patterns.add<CastToPyptoPattern<arith::ExtFOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<arith::TruncFOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<arith::ExtSIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<arith::ExtUIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<arith::TruncIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<arith::SIToFPOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<arith::UIToFPOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<arith::FPToSIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<arith::FPToUIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<arith::IndexCastOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<arith::IndexCastUIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::ExtFOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::TruncFOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::ExtSIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::ExtUIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::TruncIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::SIToFPOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::UIToFPOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::FPToSIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::FPToUIOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::IndexCastOp>>(typeConverter, ctx);
-  patterns.add<CastToPyptoPattern<npuvector::IndexCastUIOp>>(typeConverter, ctx);
-  patterns.add<BitcastToPyptoPattern<arith::BitcastOp>>(typeConverter, ctx);
-  patterns.add<BitcastToPyptoPattern<npuvector::BitcastOp>>(typeConverter, ctx);
+  patterns.add<CastToPyptoPattern<arith::ExtFOp>>(ctx);
+  patterns.add<CastToPyptoPattern<arith::TruncFOp>>(ctx);
+  patterns.add<CastToPyptoPattern<arith::ExtSIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<arith::ExtUIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<arith::TruncIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<arith::SIToFPOp>>(ctx);
+  patterns.add<CastToPyptoPattern<arith::UIToFPOp>>(ctx);
+  patterns.add<CastToPyptoPattern<arith::FPToSIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<arith::FPToUIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<arith::IndexCastOp>>(ctx);
+  patterns.add<CastToPyptoPattern<arith::IndexCastUIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::ExtFOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::TruncFOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::ExtSIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::ExtUIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::TruncIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::SIToFPOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::UIToFPOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::FPToSIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::FPToUIOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::IndexCastOp>>(ctx);
+  patterns.add<CastToPyptoPattern<npuvector::IndexCastUIOp>>(ctx);
+  patterns.add<BitcastToPyptoPattern<arith::BitcastOp>>(ctx);
+  patterns.add<BitcastToPyptoPattern<npuvector::BitcastOp>>(ctx);
 }
 
 /// Rewrites `math.round`/`math.floor`/`math.ceil` on a tile into the PyPTO
@@ -6242,8 +6669,7 @@ class RoundingCastPattern : public OpConversionPattern<OpTy> {
  public:
   using OpConversionPattern<OpTy>::OpConversionPattern;
 
-  RoundingCastPattern(TypeConverter &typeConverter, MLIRContext *ctx, StringRef mode)
-      : OpConversionPattern<OpTy>(typeConverter, ctx), mode(mode.str()) {}
+  RoundingCastPattern(MLIRContext *ctx, StringRef mode) : OpConversionPattern<OpTy>(ctx), mode(mode.str()) {}
 
   LogicalResult matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
@@ -6255,10 +6681,11 @@ class RoundingCastPattern : public OpConversionPattern<OpTy> {
       return rewriter.notifyMatchFailure(op, "rounding input must hold float elements");
     }
     Location loc = op.getLoc();
-    Type intTile = pypto::TileType::get(rewriter.getContext(), rewriter.getIntegerType(32), shaped.getShape());
-    Value asInt = rewriter.create<pypto::CastOp>(loc, intTile, op.getOperand());
+    auto physical = cast<ShapedType>(adaptor.getOperands()[0].getType());
+    Type intTile = pypto::TileType::get(rewriter.getContext(), rewriter.getIntegerType(32), physical.getShape());
+    Value asInt = rewriter.create<pypto::CastOp>(loc, pyptoType(intTile), adaptor.getOperands()[0]);
     asInt.getDefiningOp<pypto::CastOp>()->setAttr("mode", rewriter.getStringAttr(mode));
-    rewriter.replaceOpWithNewOp<pypto::CastOp>(op, op->getResultTypes(), asInt);
+    rewriter.replaceOpWithNewOp<pypto::CastOp>(op, pyptoResultTypes(op, adaptor.getOperands()), asInt);
     return success();
   }
 
@@ -6267,93 +6694,91 @@ class RoundingCastPattern : public OpConversionPattern<OpTy> {
 };
 
 /// Math dialect elementwise functions.
-static void populateMathPatterns(RewritePatternSet &patterns, TypeConverter &typeConverter) {
+static void populateMathPatterns(RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
 
   // Math dialect elementwise functions with PyPTO counterparts.
-  patterns.add<OpToPyptoOpPattern<math::AbsFOp, pypto::AbsOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<math::AbsIOp, pypto::AbsOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<math::ExpOp, pypto::ExpOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<math::LogOp, pypto::LogOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<math::SqrtOp, pypto::SqrtOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<math::RsqrtOp, pypto::RsqrtOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<math::SinOp, pypto::SinOp>>(typeConverter, ctx);
-  patterns.add<OpToPyptoOpPattern<math::CosOp, pypto::CosOp>>(typeConverter, ctx);
-  patterns.add<RoundingCastPattern<math::RoundOp>>(typeConverter, ctx, "round");
-  patterns.add<RoundingCastPattern<math::FloorOp>>(typeConverter, ctx, "floor");
-  patterns.add<RoundingCastPattern<math::CeilOp>>(typeConverter, ctx, "ceil");
+  patterns.add<OpToPyptoOpPattern<math::AbsFOp, pypto::AbsOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<math::AbsIOp, pypto::AbsOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<math::ExpOp, pypto::ExpOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<math::LogOp, pypto::LogOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<math::SqrtOp, pypto::SqrtOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<math::RsqrtOp, pypto::RsqrtOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<math::SinOp, pypto::SinOp>>(ctx);
+  patterns.add<OpToPyptoOpPattern<math::CosOp, pypto::CosOp>>(ctx);
+  patterns.add<RoundingCastPattern<math::RoundOp>>(ctx, "round");
+  patterns.add<RoundingCastPattern<math::FloorOp>>(ctx, "floor");
+  patterns.add<RoundingCastPattern<math::CeilOp>>(ctx, "ceil");
 }
 
 /// Tile ops, memref management, and control flow.
-static void populateTileAndControlFlowPatterns(RewritePatternSet &patterns, TypeConverter &typeConverter) {
+static void populateTileAndControlFlowPatterns(RewritePatternSet &patterns) {
   MLIRContext *ctx = patterns.getContext();
 
   // npuvector / vector tile ops.
-  patterns.add<TransferReadPattern<npuvector::TransferReadOp>>(typeConverter, ctx);
-  patterns.add<TransferReadPattern<vector::TransferReadOp>>(typeConverter, ctx);
-  patterns.add<TransferWritePattern<npuvector::TransferWriteOp>>(typeConverter, ctx);
-  patterns.add<TransferWritePattern<vector::TransferWriteOp>>(typeConverter, ctx);
-  patterns.add<ExtractSlicePattern>(typeConverter, ctx);
-  patterns.add<InsertSlicePattern>(typeConverter, ctx);
-  patterns.add<ReductionPattern<npuvector::ReductionOp>>(typeConverter, ctx);
-  patterns.add<ReductionPattern<vector::ReductionOp>>(typeConverter, ctx);
+  patterns.add<TransferReadPattern<npuvector::TransferReadOp>>(ctx);
+  patterns.add<TransferReadPattern<vector::TransferReadOp>>(ctx);
+  patterns.add<TransferWritePattern<npuvector::TransferWriteOp>>(ctx);
+  patterns.add<TransferWritePattern<vector::TransferWriteOp>>(ctx);
+  patterns.add<ExtractSlicePattern>(ctx);
+  patterns.add<InsertSlicePattern>(ctx);
+  patterns.add<ReductionPattern<npuvector::ReductionOp>>(ctx);
+  patterns.add<ReductionPattern<vector::ReductionOp>>(ctx);
   // Comparison-mask lift before both broadcast fusions: a rank-1 `i1`
   // comparison lifted to rank-2 rebuilds `pypto.cmp` at the broadcast's
   // geometry (pl.cmp never broadcasts and pl.tile.select demands a
   // full-geometry condition). The benefit outranks the tile-broadcast
   // fusion so an i1 source cannot stray onto the arithmetic expand
   // family, and the always-matching fallback.
-  patterns.add<BroadcastCmpMaskPattern>(typeConverter, ctx, PatternBenefit(3));
+  patterns.add<BroadcastCmpMaskPattern>(ctx, PatternBenefit(3));
   // Tile-broadcast fusion before the scalar-broadcast fallback: a rank-1
   // tile lifted to rank-2 by `dimension = [0]/[1]` and consumed by arith
   // add/sub/mul/div folds into the runtime-native row/col_expand family,
   // fusing every consumer. The benefit outranks BroadcastPattern so the
   // always-matching fallback cannot starve the fusion.
-  patterns.add<TileBroadcastFusionPattern>(typeConverter, ctx, PatternBenefit(2));
+  patterns.add<TileBroadcastFusionPattern>(ctx, PatternBenefit(2));
   // Scalar-broadcast fusion before the scalar-broadcast fallback: a
   // scalar consumed by comparisons and select branches rides through as
   // the tile-scalar `pl.tile.cmps` / `pl.tile.select` forms. The fusion
   // carries a higher benefit than BroadcastPattern: with equal benefits
   // the pattern order is unspecified, and the always-matching fallback
   // would otherwise starve the fusion.
-  patterns.add<ScalarBroadcastFusionPattern>(typeConverter, ctx, PatternBenefit(2));
-  patterns.add<BroadcastPattern<npuvector::BroadcastOp>>(typeConverter, ctx);
-  patterns.add<BroadcastPattern<vector::BroadcastOp>>(typeConverter, ctx);
-  patterns.add<TransposePattern<npuvector::TransposeOp>>(typeConverter, ctx);
-  patterns.add<TransposePattern<vector::TransposeOp>>(typeConverter, ctx);
+  patterns.add<ScalarBroadcastFusionPattern>(ctx, PatternBenefit(2));
+  patterns.add<BroadcastPattern<npuvector::BroadcastOp>>(ctx);
+  patterns.add<BroadcastPattern<vector::BroadcastOp>>(ctx);
+  patterns.add<TransposePattern<npuvector::TransposeOp>>(ctx);
+  patterns.add<TransposePattern<vector::TransposeOp>>(ctx);
 
   // memref management ops.
-  patterns.add<CollapseShapePattern>(typeConverter, ctx);
-  patterns.add<ExpandShapePattern>(typeConverter, ctx);
-  patterns.add<MemrefTransposePattern>(typeConverter, ctx);
-  patterns.add<ReshapePattern>(typeConverter, ctx);
-  patterns.add<SubviewPattern>(typeConverter, ctx);
-  patterns.add<ReinterpretCastPattern>(typeConverter, ctx);
-  patterns.add<DeallocPattern>(typeConverter, ctx);
+  patterns.add<CollapseShapePattern>(ctx);
+  patterns.add<ExpandShapePattern>(ctx);
+  patterns.add<MemrefTransposePattern>(ctx);
+  patterns.add<ReshapePattern>(ctx);
+  patterns.add<SubviewPattern>(ctx);
+  patterns.add<ReinterpretCastPattern>(ctx);
+  patterns.add<DeallocPattern>(ctx);
 
   // Control flow becomes pypto: scf.parallel/scf.forall map onto `pypto.spmd`
   // multi-core launches (the induction variable is the executing core's block
   // index) and scf.for onto the `pypto.range` per-core tile loop. Stage two
   // then only maps these pypto ops onto their emitpy spellings.
-  patterns.add<ScfParallelPattern>(typeConverter, ctx);
-  patterns.add<ScfForallPattern>(typeConverter, ctx);
-  patterns.add<ScfForPattern>(typeConverter, ctx);
+  patterns.add<ScfParallelPattern>(ctx);
+  patterns.add<ScfForallPattern>(ctx);
+  patterns.add<ScfForPattern>(ctx);
 }
 
 }  // namespace
 
 void populateVectorToPyptoConversionPatterns(RewritePatternSet &patterns, TypeConverter &typeConverter) {
-  populateFloatArithPatterns(patterns, typeConverter);
-  populateIntArithPatterns(patterns, typeConverter);
-  populateCmpSelectPatterns(patterns, typeConverter);
-  populateCastPatterns(patterns, typeConverter);
-  populateMathPatterns(patterns, typeConverter);
-  populateTileAndControlFlowPatterns(patterns, typeConverter);
+  populateFloatArithPatterns(patterns);
+  populateIntArithPatterns(patterns);
+  populateCmpSelectPatterns(patterns);
+  populateCastPatterns(patterns);
+  populateMathPatterns(patterns);
+  populateTileAndControlFlowPatterns(patterns);
 
-  // No func plumbing: signatures are rewritten by hand in the downstream
-  // convert-pypto-to-emitpy pass (see ConvertVectorToPyptoPass::
-  // runOnOperation for the body-level pre-pass), and returns/calls are
-  // legal as-is.
+  populateFunctionOpInterfaceTypeConversionPattern<func::FuncOp>(patterns, typeConverter);
+  populateCallOpTypeConversionPattern(patterns, typeConverter);
 }
 
 }  // namespace vector_to_pypto

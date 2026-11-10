@@ -10,10 +10,8 @@ add_akg_translation_library(AkgTargetPython
 
   LINK_LIBS PUBLIC
   AKGEmitPyDialect
-  AKGNPUVectorDialect
   MLIRFuncDialect
   MLIRIR
   MLIRSupport
   MLIRTranslateLib
-  MLIRVectorDialect
 )

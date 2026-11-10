@@ -7,11 +7,9 @@
 // (https://github.com/tenstorrent/tt-mlir) and modified for AKG-MLIR.
 
 #include "akg/Dialect/EmitPy/IR/EmitPy.h"
-#include "akg/Dialect/NPUVector/IR/NPUVector.h"
 #include "akg/Target/Pypto/PyptoEmitter.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
 #include "llvm/Support/CommandLine.h"
 
@@ -36,10 +34,7 @@ void registerToPyptoTranslation() {
         return emitpy::translateToPython(op, output, fileId);
       },
       [](DialectRegistry &registry) {
-        // Tile values produced by `emitpy.call_opaque` keep their source
-        // (npuvector/vector) types; those dialects must be parseable.
-        registry.insert<emitpy::EmitPyDialect, func::FuncDialect,
-                        npuvector::NPUVectorDialect, vector::VectorDialect>();
+        registry.insert<emitpy::EmitPyDialect, func::FuncDialect>();
       });
 }
 

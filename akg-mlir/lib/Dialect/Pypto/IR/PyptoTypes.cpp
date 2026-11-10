@@ -59,6 +59,10 @@ bool parseShapeEntry(::mlir::AsmParser &parser, int64_t &dim) {
 // TileType
 //===----------------------------------------------------------------------===//
 
+TileType TileType::cloneWith(std::optional<ArrayRef<int64_t>> shape, Type elementType) const {
+  return TileType::get(elementType, shape ? *shape : getShape());
+}
+
 ::mlir::LogicalResult mlir::pypto::TileType::verify(
     llvm::function_ref<mlir::InFlightDiagnostic()> emitError, Type elementType,
     llvm::ArrayRef<int64_t> shape) {
@@ -102,7 +106,7 @@ Type TileType::parse(::mlir::AsmParser &parser) {
   if (failed(parser.parseGreater())) {
     return Type();
   }
-  return TileType::get(elementType, shape);
+  return TileType::getChecked([&]() { return parser.emitError(parser.getCurrentLocation()); }, elementType, shape);
 }
 
 void TileType::print(::mlir::AsmPrinter &printer) const {

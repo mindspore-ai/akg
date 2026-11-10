@@ -119,6 +119,7 @@ def Pypto_CreateTileOp : Pypto_Op<"create_tile"> {
   }];
   let results = (outs Pypto_TileType:$result);
   let assemblyFormat = "attr-dict `:` type($result)";
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
