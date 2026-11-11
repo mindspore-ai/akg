@@ -110,6 +110,17 @@ def Pypto_FillPadExpandOp : Pypto_Op<"fillpad_expand"> {
   let hasVerifier = 1;
 }
 
+def Pypto_LocalTileOp : Pypto_Op<"local_tile"> {
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
+def Pypto_AssignOp : Pypto_Op<"assign"> {
+  let summary = "Rebind a local tile variable, including across a counted loop";
+  let arguments = (ins AnyType:$dest, AnyType:$value);
+  let assemblyFormat = "$dest `,` $value attr-dict `:` type($dest) `,` type($value)";
+}
+
 def Pypto_CreateTileOp : Pypto_Op<"create_tile"> {
   let summary = "Allocate an uninitialized scratch tile";
   let description =
