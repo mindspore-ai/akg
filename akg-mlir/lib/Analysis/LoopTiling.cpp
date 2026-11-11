@@ -98,6 +98,7 @@ struct CreateTilingFuncParams {
   bool isStaticShape;
   int64_t tilingKey;
   TilingMetadata *metadata;
+  bool enablePto;
 };
 
 static LogicalResult createTilingFuncDefault(const CreateTilingFuncParams &params, func::FuncOp &tilingFunc);
@@ -108,7 +109,7 @@ struct BandTilingOutput {
 };
 
 static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAutoTiling, BandTilingOutput output,
-                                                size_t &levelToTile);
+                                                size_t &levelToTile, bool enablePto);
 struct ApplyTilingParams {
   mutable mlir::scf::ForOp loop;
   ArrayRef<Value> tileSizeValues;
@@ -293,6 +294,7 @@ struct PrepareTileMetadataParams {
   bool isStaticShape;
   BandTilingOutput bandOutput;
   const TilingMetadata *metadata;
+  bool enablePto;
 };
 
 static LogicalResult prepareTileMetadataForApply(
@@ -1253,7 +1255,7 @@ static void logAllBandTileSizes(const std::vector<SmallVector<unsigned, kSmallVe
 }
 
 static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAutoTiling, BandTilingOutput output,
-                                                size_t &levelToTile) {
+                                                size_t &levelToTile, bool enablePto) {
   auto &bandsToUse = output.bandsToUse;
   auto &allBandTileSizes = output.allBandTileSizes;
   auto &allBandConstraintMaxs = output.allBandConstraintMaxs;
@@ -1316,7 +1318,7 @@ static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAut
   initGraph->setIsDynamicShape(isDynamicShape);
   initGraph->setTilingMode("auto");
 
-  auto modelGraph = buildModelGraph(initGraph);
+  auto modelGraph = buildModelGraph(initGraph, enablePto);
   auto solver = getHeuristicTilingSolver(modelGraph);
   levelToTile = modelGraph->levelToTile;
 
@@ -3667,6 +3669,7 @@ struct DynamicTilingFunctionDataParams {
   bool hasPresetMetadata;
   int64_t tilingKey;
   TilingMetadata *metadata;
+  bool enablePto;
 };
 
 static LogicalResult prepareDynamicTilingFunctionData(const DynamicTilingFunctionDataParams &params,
@@ -3692,7 +3695,7 @@ static LogicalResult prepareDynamicTilingFunctionData(const DynamicTilingFunctio
     }
   } else {
     size_t levelToTile = 0;
-    if (failed(calculateTileSizesForBands(params.originalKernel, true, params.output, levelToTile))) {
+    if (failed(calculateTileSizesForBands(params.originalKernel, true, params.output, levelToTile, params.enablePto))) {
       return failure();
     }
   }
@@ -3747,7 +3750,7 @@ static LogicalResult createTilingFuncDefault(const CreateTilingFuncParams &param
   if (!isStaticShape &&
       failed(prepareDynamicTilingFunctionData(
         {originalKernel, leafBranchPlans, BandTilingOutput{bandsToUse, allBandTileSizes, allBandConstraintMaxs},
-         skipTiling, hasPresetMetadata, tilingKey, metadata},
+         skipTiling, hasPresetMetadata, tilingKey, metadata, params.enablePto},
         tilingStructMemrefSize))) {
     return failure();
   }
@@ -3800,12 +3803,12 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
 }
 
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
-                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
-                                    TilingMetadata *metadata) {
+                                    DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape, TilingMetadata *metadata,
+                                    bool enablePto) {
   out.clear();
   func::FuncOp tilingFunc;
-  if (failed(
-        createTilingFuncDefault({originalKernel, builder, isStaticShape, kDefaultTilingKey, metadata}, tilingFunc))) {
+  if (failed(createTilingFuncDefault({originalKernel, builder, isStaticShape, kDefaultTilingKey, metadata, enablePto},
+                                     tilingFunc))) {
     return failure();
   }
   out[kDefaultTilingKey] = tilingFunc;
@@ -3858,7 +3861,7 @@ LogicalResult materializeDynamicSelectorOuterTiles(func::FuncOp originalKernel, 
 
 LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &builder,
                                     DenseMap<int64_t, func::FuncOp> &out, bool isStaticShape,
-                                    TilingMetadataMap *metadataByKey) {
+                                    TilingMetadataMap *metadataByKey, bool enablePto) {
   out.clear();
   if (metadataByKey) {
     metadataByKey->clear();
@@ -3867,7 +3870,7 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
   TilingMetadata key0Metadata;
   func::FuncOp tilingFunc;
   if (failed(createTilingFuncDefault(
-        {originalKernel, builder, isStaticShape, kDefaultTilingKey, metadataByKey ? &key0Metadata : nullptr},
+        {originalKernel, builder, isStaticShape, kDefaultTilingKey, metadataByKey ? &key0Metadata : nullptr, enablePto},
         tilingFunc))) {
     return failure();
   }
@@ -3882,8 +3885,8 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
   }
   if (!cases.empty() && cases.front().maxVectorTile > 0) {
     tilingFunc.erase();
-    if (failed(createTilingFuncDefault({originalKernel, builder, isStaticShape, kDefaultTilingKey, &cases.front()},
-                                       tilingFunc))) {
+    if (failed(createTilingFuncDefault(
+          {originalKernel, builder, isStaticShape, kDefaultTilingKey, &cases.front(), enablePto}, tilingFunc))) {
       return failure();
     }
     key0Metadata = cases.front();
@@ -3899,8 +3902,8 @@ LogicalResult createTilingFunctions(func::FuncOp originalKernel, OpBuilder &buil
   for (size_t i = 1; i < cases.size(); ++i) {
     TilingMetadata metadata = cases[i];
     func::FuncOp caseTilingFunc;
-    if (failed(createTilingFuncDefault({originalKernel, builder, isStaticShape, metadata.tilingKey, &metadata},
-                                       caseTilingFunc))) {
+    if (failed(createTilingFuncDefault(
+          {originalKernel, builder, isStaticShape, metadata.tilingKey, &metadata, enablePto}, caseTilingFunc))) {
       return failure();
     }
     out[metadata.tilingKey] = caseTilingFunc;
@@ -4460,7 +4463,7 @@ static LogicalResult prepareTileMetadataForApply(
     size_t levelToTile = 0;
     if (failed(calculateTileSizesForBands(originalKernel, true,
                                           BandTilingOutput{bandsToUse, allBandTileSizesInt, allBandConstraintMaxs},
-                                          levelToTile))) {
+                                          levelToTile, params.enablePto))) {
       return failure();
     }
   }
@@ -4756,7 +4759,7 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
 }
 
 LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &builder, bool isStaticShape,
-                                        const TilingMetadata *metadata) {
+                                        const TilingMetadata *metadata, bool enablePto) {
   auto loc = originalKernel.getLoc();
 
   std::vector<LeafBranchBandPlan> leafBranchPlans;
@@ -4790,7 +4793,7 @@ LogicalResult applyTilingFromTilingFunc(func::FuncOp originalKernel, OpBuilder &
   std::map<int64_t, Value> constantCache;
   if (failed(prepareTileMetadataForApply(
         {originalKernel, isStaticShape, BandTilingOutput{bandsToUse, allBandTileSizesInt, allBandConstraintMaxs},
-         metadata},
+         metadata, enablePto},
         BuildContext{loc, builder, constantCache}, allTileSizeValues))) {
     return failure();
   }

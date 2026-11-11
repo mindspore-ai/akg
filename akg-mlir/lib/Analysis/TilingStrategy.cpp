@@ -952,6 +952,7 @@ struct TransposeVectorInfo {
 using TransposeVectorInfos = SmallVector<TransposeVectorInfo, kSmallVectorSizeZero>;
 
 struct NpuBandContext {
+  bool enablePto{false};
   func::FuncOp func;
   size_t bandIdx{0};
   SmallVector<AxisPtr, kSmallVectorSizeFour> axes;
@@ -2012,6 +2013,7 @@ NpuBandContext buildNpuBandContext(const NpuModelGraphPtr &npuGraph, size_t band
     ctx.func = dyn_cast<func::FuncOp>(npuGraph->funcOp);
   }
 
+  ctx.enablePto = npuGraph->enablePto;
   ctx.graphTemplate = npuGraph->graphTemplate;
   ctx.targetBlocks =
     (npuGraph->coreNum > 0) ? static_cast<int64_t>(npuGraph->coreNum) : static_cast<int64_t>(kNpuTargetBlocks);
@@ -2323,6 +2325,7 @@ bool satisfiesStrideAlignWithoutExpansion(const NpuBandContext &ctx, const Vecto
 int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
   PeakAnalysisInput input;
   input.func = ctx.func;
+  input.enablePto = ctx.enablePto;
   for (auto [idx, axis] : llvm::enumerate(ctx.axes)) {
     int64_t tile = (idx < axisTiles.size()) ? axisTiles[idx] : 1;
     int64_t extent = (idx < ctx.extents.size()) ? ctx.extents[idx] : tile;
@@ -3826,18 +3829,20 @@ bool tryBuildReductionSuffixPlan(const NpuBandContext &ctx, BandTilePlan &plan) 
     return false;
   }
 
-  size_t suffixStart = computeReductionSuffixStart(ctx);
-  if (suffixStart == 0 && !singleReductionAxis) {
-    return false;
-  }
-
   if (!isInnermostAxisReduceY(ctx)) {
+    // Reduce-x searches with the peak estimator even when the coarse element
+    // budget covers the whole band: padding can still make that band exceed UB.
     initWholeBandPlan(ctx, plan);
     assignParallelPrefixOuterTiles(ctx, plan, true /* alignParallelTiles */, true /* preferCoreMultiples */);
     computeInnerTilesVecGreedy(ctx, plan, collectReductionAxisMask(ctx));
     preserveDegeneratePrefixTransposeAxes(ctx, plan);
     plan.usesMultiVecScheme = true;
     return true;
+  }
+
+  size_t suffixStart = computeReductionSuffixStart(ctx);
+  if (suffixStart == 0 && !singleReductionAxis) {
+    return false;
   }
 
   if (std::optional<size_t> targetAxis = findReduceYVectorTargetAxis(ctx)) {

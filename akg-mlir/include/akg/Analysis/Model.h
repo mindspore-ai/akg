@@ -195,6 +195,7 @@ class NpuModelGraph : public ModelGraph {
   void InitResource();
 
   // NPU resources - direct access to member variables
+  bool enablePto{false};
   int64_t ubSize{0};             // Unified Buffer size in bytes
   int64_t coreNum{0};            // Number of available cores (AIV or AIC)
   int64_t maxBufferCnt{0};       // Maximum buffer count from buffer analysis

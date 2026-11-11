@@ -45,12 +45,13 @@ InitGraphPtr parseIr(const std::vector<SmallVector<scf::ForOp, 6>> &bands);
 
 /// Analyze some contextual information (such as whether subsequent passes need to be opened double_buffer), as well as
 /// some preliminary strategies (such as operator priority, memory bottleneck statements)
-ModelGraphPtr buildModelGraph(InitGraphPtr initGraph);
+ModelGraphPtr buildModelGraph(InitGraphPtr initGraph, bool enablePto = false);
 
 /// Because these preliminary analyses are hardware-specific, ModelGraph subclass inheritance for different
 /// hardware platforms can be (e.g., GpuModelGraph, CpuModelGraph and NpuModelGraph).
 GpuModelGraphPtr buildGpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr);
-NpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr);
+NpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr,
+                                    bool enablePto = false);
 CpuModelGraphPtr buildCpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr);
 
 /// Encapsulates the steps required to solve sharding, and supports two solution methods: heuristic and search (Tuning);

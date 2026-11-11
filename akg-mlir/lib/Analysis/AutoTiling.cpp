@@ -71,7 +71,7 @@ InitGraphPtr parseIr(const std::vector<SmallVector<affine::AffineForOp, 6>> &ban
   return initGraph;
 }
 
-ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
+ModelGraphPtr buildModelGraph(InitGraphPtr initGraph, bool enablePto) {
   auto hardware = initGraph->hardware;
   auto operatorTypes = dyn_cast<StringAttr>(initGraph->funcOp->getAttr("OperatorType"));
   initGraph->setGraphType(operatorTypes);
@@ -107,7 +107,7 @@ ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
   if (hardware == kTargetCpu) {
     return buildCpuModelGraph(initGraph, tilingMgr);
   } else if (hardware == kTargetNpu) {
-    return buildNpuModelGraph(initGraph, tilingMgr);
+    return buildNpuModelGraph(initGraph, tilingMgr, enablePto);
   } else {
     llvm::errs() << "Not impl model graph for hardware " << hardware;
     return std::make_shared<ModelGraph>(initGraph);
@@ -156,8 +156,9 @@ GpuModelGraphPtr buildGpuModelGraph(InitGraphPtr initGraph, const TilingStrategy
   return gpuGraph;
 }
 
-NpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr) {
+NpuModelGraphPtr buildNpuModelGraph(InitGraphPtr initGraph, const TilingStrategyManagerPtr tilingMgr, bool enablePto) {
   auto npuGraph = std::make_shared<NpuModelGraph>(initGraph);
+  npuGraph->enablePto = enablePto;
   npuGraph->funcOp = initGraph->funcOp;
   npuGraph->AnalyzeGraphTemplate();
   npuGraph->AnalyzeBufferInfo();

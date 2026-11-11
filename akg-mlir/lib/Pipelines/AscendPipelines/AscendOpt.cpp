@@ -272,7 +272,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     pm.addPass(createCanonicalizerPass());
     pm.addPass(createLegalizeBoolPass());
     // tiling
-    pm.addPass(createNPUAutoTilingPass(options.arch));
+    pm.addPass(createNPUAutoTilingPass(options.arch, options.enableEmitPypto));
     pm.addPass(createAllocBufferShrinkPass());
     // vector
     pm.addPass(createSCFForLoopCanonicalizationPass());

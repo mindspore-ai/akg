@@ -22,7 +22,8 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
-std::unique_ptr<OperationPass<ModuleOp>> createNPUAutoTilingPass(const std::string &arch = "Ascend910B1");
+std::unique_ptr<OperationPass<ModuleOp>> createNPUAutoTilingPass(const std::string &arch = "Ascend910B1",
+                                                                 bool enablePto = false);
 }  // namespace mlir
 
 #endif  // AKG_TRANSFORMS_NPUAUTOTILINGFUNC_H_
