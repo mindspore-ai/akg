@@ -782,6 +782,41 @@ class SpmdOpPattern : public OpConversionPattern<pypto::SpmdOp> {
 /// Rewrites `pypto.range` into `emitpy.for` (emitted as
 /// `for <iv> in pl.range(lb, ub, step)`): the per-core tile loop. Stage
 /// one already resolved the loop, so this is a direct retargeting.
+class LocalAssignOpPattern : public OpConversionPattern<pypto::AssignOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(pypto::AssignOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value value = adaptor.getValue();
+    if (auto valid = op->getAttrOfType<IntegerAttr>("valid_size")) {
+      auto tile = cast<pypto::TileType>(op.getDest().getType());
+      int64_t size = tile.getShape().back();
+      Type rowType = getTypeConverter()->convertType(
+        pypto::TileType::get(rewriter.getContext(), tile.getElementType(), {1, size}));
+      auto opaque = [&](StringRef text) { return emitpy::OpaqueAttr::get(rewriter.getContext(), text); };
+      std::string shape = "[1, " + std::to_string(size) + "]";
+      std::string validShape = "[1, " + std::to_string(valid.getInt()) + "]";
+      auto call = [&](StringRef name, Type type, Value input, ArrayRef<Attribute> args,
+                      ArrayRef<Attribute> keywords) -> Value {
+        return rewriter.create<emitpy::CallOpaqueOp>(op.getLoc(), type, name, ValueRange{input},
+                 rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords)).getResult(0);
+      };
+      value = call("pl.reshape", rowType, value, {rewriter.getIndexAttr(0), opaque(shape)},
+                   {rewriter.getStringAttr(""), rewriter.getStringAttr("")});
+      value = call("pl.slice", rowType, value,
+                   {rewriter.getIndexAttr(0), opaque(shape), opaque("[0, 0]"), opaque(validShape),
+                    opaque("pl.PadValue.null")},
+                   {rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr(""),
+                    rewriter.getStringAttr("valid_shape"), rewriter.getStringAttr("pad_value")});
+      value = call("pl.reshape", adaptor.getDest().getType(), value,
+                   {rewriter.getIndexAttr(0), opaque("[" + std::to_string(size) + "]")},
+                   {rewriter.getStringAttr(""), rewriter.getStringAttr("")});
+    }
+    rewriter.replaceOpWithNewOp<emitpy::AssignOp>(op, adaptor.getDest(), value);
+    return success();
+  }
+};
+
 class RangeOpPattern : public OpConversionPattern<pypto::RangeOp> {
  public:
   using OpConversionPattern<pypto::RangeOp>::OpConversionPattern;
@@ -1801,7 +1836,8 @@ struct ConvertPyptoToEmitPyPass : impl::ConvertPyptoToEmitPyBase<ConvertPyptoToE
                  ReshapeOpPattern, TransposeOpPattern, ReinterpretViewOpPattern, CastOpPattern, CmpOpPattern,
                  ReductionOpPattern, ReadOpPattern, WriteOpPattern, LoadOpPattern, StoreOpPattern, MatmulOpPattern>(
       typeConverter, patterns.getContext());
-    patterns.add<IndexConstantOpPattern, SpmdOpPattern, RangeOpPattern>(typeConverter, patterns.getContext());
+    patterns.add<LocalAssignOpPattern, IndexConstantOpPattern, SpmdOpPattern, RangeOpPattern>(typeConverter,
+                                                                                         patterns.getContext());
     // Scalar comparisons kept by stage one lower onto the eq/ne/lt/le/gt/ge
     // pseudo-callees (`pl.cmp` has no scalar overload).
     patterns.add<ArithCmpPattern<arith::CmpIOp>, ArithCmpPattern<arith::CmpFOp>>(typeConverter, patterns.getContext());

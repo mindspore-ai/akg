@@ -1055,6 +1055,15 @@ static std::optional<SmallVector<int64_t>> tileAllocationShape(Value v, unsigned
   if (!def) {
     return std::nullopt;
   }
+  if (isa<pypto::LocalTileOp>(def)) {
+    auto type = cast<ShapedType>(v.getType());
+    SmallVector<int64_t> shape(type.getShape());
+    // A BF16 load can retain its 32-byte row alignment after casting to
+    // FP32. Reserve 64-byte rows for the local accumulator as well.
+    int64_t alignment = 64 / (type.getElementType().getIntOrFloatBitWidth() / 8);
+    shape.back() = llvm::divideCeil(shape.back(), alignment) * alignment;
+    return shape;
+  }
   if (auto read = dyn_cast<npuvector::TransferReadOp>(def)) {
     return npuReadAllocationShape(v, read, depth);
   }
@@ -5543,7 +5552,9 @@ static void collectWriteDestArgs(func::FuncOp funcOp, Block &entry, DenseSet<uns
   });
   for (unsigned argNumber : writeDests) {
     BlockArgument arg = entry.getArgument(argNumber);
-    if (argHasNonWriteUse(arg)) {
+    if (funcOp.getArgAttr(argNumber, "hacc.output_idx")) {
+      outArgs.insert(argNumber);
+    } else if (argHasNonWriteUse(arg)) {
       inOutArgs.insert(argNumber);
     } else {
       outArgs.insert(argNumber);
@@ -5651,6 +5662,132 @@ static void offsetWorkspaceUsers(Value result, Value offset, bool addLeadingDime
     }
   }
 }
+
+/// Rebinding a Python local must not change an older read snapshot.
+/// Every consumer must precede the next possible write to the buffer.
+static bool privateTileReadPreservesSnapshot(npuvector::TransferReadOp read, Value buffer) {
+  for (Operation *consumer : read.getResult().getUsers()) {
+    if (consumer->getBlock() != read->getBlock() || !read->isBeforeInBlock(consumer)) {
+      return false;
+    }
+    for (Operation *next = read->getNextNode(); next != consumer; next = next->getNextNode()) {
+      bool hasWrite = false;
+      next->walk([&](npuvector::TransferWriteOp write) {
+        if (write.getSource() == buffer) hasWrite = true;
+      });
+      if (hasWrite) return false;
+    }
+  }
+  return true;
+}
+
+/// Only sequential counted loops may carry the private binding.
+static bool privateTileHasSequentialParents(Operation *user, Operation *alloc) {
+  for (Operation *parent = user->getParentOp(); parent != alloc->getParentOp(); parent = parent->getParentOp()) {
+    if (!parent || !isa<scf::ForOp>(parent)) return false;
+  }
+  return true;
+}
+
+/// Validate one full-buffer access and collect its common logical tile type.
+static bool classifyPrivateTileAccess(Operation *user, memref::AllocOp alloc, Type &tileType) {
+  auto buffer = alloc.getType();
+  ValueRange indices;
+  Type accessType;
+  if (auto read = dyn_cast<npuvector::TransferReadOp>(user)) {
+    if (read.getMask()) return false;
+    if (llvm::any_of(read.getDynamicSizes(), [&](Value size) {
+          return mixedIndexValue(size) != std::optional<int64_t>(buffer.getDimSize(0));
+        })) return false;
+    if (!privateTileReadPreservesSnapshot(read, alloc.getResult())) return false;
+    indices = read.getIndices();
+    accessType = read.getVector().getType();
+  } else if (auto write = dyn_cast<npuvector::TransferWriteOp>(user)) {
+    if (write.getMask()) return false;
+    indices = write.getIndices();
+    accessType = write.getVector().getType();
+  } else {
+    return isa<memref::DeallocOp>(user);
+  }
+  auto shaped = dyn_cast<ShapedType>(accessType);
+  if (!shaped || shaped.getShape() != buffer.getShape() ||
+      shaped.getElementType() != buffer.getElementType() ||
+      indices.size() != 1 || mixedIndexValue(indices.front()) != std::optional<int64_t>(0) ||
+      (tileType && tileType != accessType)) return false;
+  tileType = accessType;
+  return privateTileHasSequentialParents(user, alloc);
+}
+
+/// Keep private, whole-buffer transfers in Vec memory. The slot is a
+/// Python local binding; assignments inside pl.range carry it to the next
+/// iteration without introducing a GM workspace into the kernel signature.
+static void localizePrivateTiles(func::FuncOp funcOp) {
+  SmallVector<memref::AllocOp> allocs;
+  funcOp.walk([&](memref::AllocOp op) { allocs.push_back(op); });
+  for (auto alloc : allocs) {
+    auto buffer = alloc.getType();
+    if (!buffer.hasStaticShape() || buffer.getRank() != 1) continue;
+    Type tileType;
+    bool supported = llvm::all_of(alloc.getResult().getUsers(), [&](Operation *user) {
+      return classifyPrivateTileAccess(user, alloc, tileType);
+    });
+    if (!supported || !tileType) continue;
+    OpBuilder builder(alloc);
+    Value slot = builder.create<pypto::LocalTileOp>(alloc.getLoc(), tileType);
+    for (Operation *user : llvm::to_vector(alloc.getResult().getUsers())) {
+      builder.setInsertionPoint(user);
+      if (auto read = dyn_cast<npuvector::TransferReadOp>(user)) {
+        read.getResult().replaceAllUsesWith(slot);
+      } else if (auto write = dyn_cast<npuvector::TransferWriteOp>(user)) {
+        auto assign = builder.create<pypto::AssignOp>(write.getLoc(), slot, write.getVector());
+        assign->setAttr("valid_size", builder.getI64IntegerAttr(buffer.getDimSize(0)));
+      }
+      user->erase();
+    }
+    alloc.erase();
+  }
+}
+
+class LocalTilePattern : public OpConversionPattern<pypto::LocalTileOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(pypto::LocalTileOp op, OpAdaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto type = cast<ShapedType>(op.getResult().getType());
+    SmallVector<int64_t> shape(type.getShape());
+    // A BF16 load can retain its 32-byte row alignment after casting to
+    // FP32. Reserve 64-byte rows for the local accumulator as well.
+    int64_t alignment = 64 / (type.getElementType().getIntOrFloatBitWidth() / 8);
+    shape.back() = llvm::divideCeil(shape.back(), alignment) * alignment;
+    rewriter.replaceOpWithNewOp<pypto::CreateTileOp>(op, pyptoType(op.getResult().getType(), shape));
+    return success();
+  }
+};
+
+class LocalAssignPattern : public OpConversionPattern<pypto::AssignOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(pypto::AssignOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    Value value = adaptor.getValue();
+    auto destType = cast<pypto::TileType>(adaptor.getDest().getType());
+    auto sourceType = cast<pypto::TileType>(value.getType());
+    if (sourceType.getShape() != destType.getShape()) {
+      auto rowType = pypto::TileType::get(rewriter.getContext(), sourceType.getElementType(),
+                                         {1, sourceType.getShape().back()});
+      value = rewriter.create<pypto::ReshapeOp>(op.getLoc(), rowType, value, ValueRange{}, ValueRange{});
+      auto paddedType = pypto::TileType::get(rewriter.getContext(), sourceType.getElementType(),
+                                            {1, destType.getShape().back()});
+      value = rewriter.create<pypto::FillPadExpandOp>(op.getLoc(), paddedType, value,
+                                                    rewriter.getStringAttr("zero"));
+      value = rewriter.create<pypto::ReshapeOp>(op.getLoc(), destType, value, ValueRange{}, ValueRange{});
+    }
+    auto attrs = op->getAttrs();
+    auto assign = rewriter.replaceOpWithNewOp<pypto::AssignOp>(op, adaptor.getDest(), value);
+    assign->setAttrs(attrs);
+    return success();
+  }
+};
 
 /// Appends output parameters for allocations that only feed stores/returns
 /// (step 2): read-back allocations become InOut instead.
@@ -6612,6 +6749,7 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
     funcOp->setAttr(kPyptoKernelAttr, UnitAttr::get(ctx));
 
     undoSizeOneShapeFolds(funcOp);
+    localizePrivateTiles(funcOp);
 
     // Normalize the function I/O to the PyPTO Out-parameter model before
     // converting: the rewrite inserts npuvector/vector transfer ops that the
@@ -6635,6 +6773,12 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
     // Patterns create both the target operations and their physical Tile types.
     target.addDynamicallyLegalDialect<pypto::PyptoDialect>([](Operation *op) {
       return llvm::none_of(op->getResultTypes(), [](Type type) { return isa<npuvector::NPUVectorType>(type); });
+    });
+    target.addIllegalOp<pypto::LocalTileOp>();
+    target.addDynamicallyLegalOp<pypto::AssignOp>([](pypto::AssignOp op) {
+      auto dest = dyn_cast<pypto::TileType>(op.getDest().getType());
+      auto value = dyn_cast<pypto::TileType>(op.getValue().getType());
+      return dest && value && dest.getShape() == value.getShape();
     });
     target
       .addIllegalDialect<npuvector::NPUVectorDialect, vector::VectorDialect, arith::ArithDialect, math::MathDialect>();
@@ -6904,6 +7048,7 @@ static void populateTileAndControlFlowPatterns(RewritePatternSet &patterns) {
   patterns.add<ReshapePattern>(ctx);
   patterns.add<SubviewPattern>(ctx);
   patterns.add<ReinterpretCastPattern>(ctx);
+  patterns.add<LocalTilePattern, LocalAssignPattern>(ctx);
   patterns.add<DeallocPattern>(ctx);
 
   // Control flow becomes pypto: scf.parallel/scf.forall map onto `pypto.spmd`
