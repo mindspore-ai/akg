@@ -888,6 +888,22 @@ class ConstantOpPattern : public OpConversionPattern<pypto::ConstantOp> {
 /// result carries one extent operand per dimension (constants fold into
 /// the list literal, runtime bounds become operand references, exactly
 /// like offsets).
+/// Materialize non-finite floats through integer bits: PTOAS accepts integer
+/// literals, but rejects bare inf/nan floating-point literals.
+static std::optional<APInt> nonFiniteTileBits(StringRef text, Type elementType) {
+  auto floating = dyn_cast<FloatType>(elementType);
+  if (!floating || !text.consume_front("pl._dump.float64('") || !text.consume_back("')")) {
+    return std::nullopt;
+  }
+  uint64_t rawBits;
+  if (text.size() != 16 || text.getAsInteger(16, rawBits)) return std::nullopt;
+  APFloat value(APFloat::IEEEdouble(), APInt(64, rawBits));
+  if (value.isFinite()) return std::nullopt;
+  bool losesInfo = false;
+  value.convert(floating.getFloatSemantics(), APFloat::rmNearestTiesToEven, &losesInfo);
+  return value.bitcastToAPInt();
+}
+
 class TileFullOpPattern : public OpConversionPattern<pypto::TileFullOp> {
  public:
   using OpConversionPattern<pypto::TileFullOp>::OpConversionPattern;
@@ -938,6 +954,27 @@ class TileFullOpPattern : public OpConversionPattern<pypto::TileFullOp> {
     SmallVector<Attribute> args{shapeArg, rewriter.getAttr<emitpy::OpaqueAttr>(*dtype),
                                 rewriter.getAttr<emitpy::OpaqueAttr>(op.getValue())};
     SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr(""), rewriter.getStringAttr("")};
+    if (auto bits = nonFiniteTileBits(op.getValue(), elementType)) {
+      Type integer = rewriter.getIntegerType(bits->getBitWidth());
+      Type integerTile;
+      if (auto tile = dyn_cast<pypto::TileType>(sourceType)) {
+        integerTile = pypto::TileType::get(rewriter.getContext(), integer, tile.getShape());
+      } else {
+        auto shaped = cast<ShapedType>(sourceType);
+        integerTile = shaped.clone(shaped.getShape(), integer);
+      }
+      args[1] = rewriter.getAttr<emitpy::OpaqueAttr>(*pyptoDtypeName(integer));
+      args[2] = rewriter.getAttr<emitpy::OpaqueAttr>(
+        "pl.const(" + *intToPythonText(*bits) + ", " + *pyptoDtypeName(integer) + ")");
+      Value full = rewriter.create<emitpy::CallOpaqueOp>(
+        op.getLoc(), getTypeConverter()->convertType(integerTile), "pl.tile.full", ValueRange(fullOperands),
+        rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords)).getResult(0);
+      rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(
+        op, resultType, "pl.reinterpret_view", ValueRange{full},
+        rewriter.getArrayAttr({rewriter.getIndexAttr(0), rewriter.getAttr<emitpy::OpaqueAttr>(*dtype)}),
+        rewriter.getArrayAttr({rewriter.getStringAttr(""), rewriter.getStringAttr("")}));
+      return success();
+    }
     rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.tile.full", ValueRange(fullOperands),
                                                       rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
     return success();

@@ -155,11 +155,6 @@ static SmallVector<Type> pyptoResultTypes(Operation *source, ValueRange operands
 
 /// Renders a floating-point value as Python source text.
 static std::string floatToPythonText(APFloat value) {
-  // PTOAS cannot parse scalar infinity literals. Use the finite FP32
-  // extremum for reduction sentinels on this backend.
-  if (value.isInfinity()) {
-    return value.isNegative() ? "(-1.0 * 3.4028234663852886e38)" : "3.4028234663852886e38";
-  }
   if (value.isInfinity() || value.isNaN()) {
     // Non-finite values have no Python numeric literal, and the PIL parser
     // rejects a float('inf') call ("Unsupported function call") wherever it
@@ -4438,9 +4433,9 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
   }
 
   /// A non-finite clamp bound (-inf/+inf/nan) must stay on the `tile_full`
-  /// materialization: the runtime spells a tile-full constant with its hex
-  /// bit pattern (`0xFF800000`), which ptoas parses, while a scalar
-  /// `pl.const` prints the bare `-inf` literal, which ptoas rejects. Both
+  /// materialization: stage two reconstructs its integer bit pattern via
+  /// reinterpret_view, while a scalar `pl.const` prints a bare `-inf`
+  /// literal, which ptoas rejects. Both
   /// constant spellings are probed, mirroring `isLiteralScalar`.
   static bool isNonFiniteScalarConstant(Value scalar) {
     if (auto pyptoConst = scalar.getDefiningOp<pypto::ConstantOp>()) {
@@ -4523,7 +4518,11 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
         return false;
       }
       Value other = trueIsBcast ? select.getFalseValue() : select.getTrueValue();
-      return isTileType(other.getType()) && isTileType(select.getCondition().getType());
+      Value scalar = cast<npuvector::BroadcastOp>(bcast.getDefiningOp()).getSource();
+      // Keep infinities/NaNs as tile constants: scalar select literals lose
+      // their bit-pattern spelling in PTOAS, while tile.full preserves it.
+      return isTileType(other.getType()) && isTileType(select.getCondition().getType()) &&
+             !isNonFiniteScalarConstant(scalar);
     }
     if (isFusableArithBinary(user)) {
       return isFusibleArithBinaryUser(user, bcast, isTileType);
