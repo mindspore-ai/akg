@@ -2,6 +2,68 @@
 // RUN: akg-opt %s -convert-vector-to-pypto | FileCheck %s --check-prefix=PYPTO --implicit-check-not='!npuvector' --implicit-check-not='unrealized_conversion_cast'
 // RUN: akg-opt %s -convert-vector-to-pypto | akg-opt -convert-pypto-to-emitpy | FileCheck %s --implicit-check-not='!npuvector' --implicit-check-not='unrealized_conversion_cast'
 
+// FP8 conversion keeps the exact format through constants, tiles and output tensors.
+func.func @test_fp8_e4m3fn(%arg0 : !npuvector<1x32xf32>, %arg1 : memref<1x32xf8E4M3FN>, %arg2 : memref<1x32xf32>, %arg3 : memref<1x32xf8E4M3FN>) {
+  // CHECK-LABEL: func.func @test_fp8_e4m3fn(
+  // CHECK-SAME: %arg1: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP8E4M3FN
+  // CHECK-SAME: %arg3: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP8E4M3FN
+  // CHECK: %[[NARROW:.*]] = emitpy.call_opaque "pl.cast"({{.*}}) {{.*}}"pl.FP8E4M3FN"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[NARROW]], %arg1)
+  // CHECK: %[[WIDE:.*]] = emitpy.call_opaque "pl.cast"(%[[NARROW]]) {{.*}}"pl.FP32"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[WIDE]], %arg2)
+  // CHECK: %[[ZERO:.*]] = emitpy.call_opaque "pl.tile.full"() {{.*}}"pl.FP8E4M3FN"{{.*}}"0.0"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[ZERO]], %arg3)
+  // PYPTO-LABEL: func.func @test_fp8_e4m3fn(
+  // PYPTO: pypto.constant "0.0" : f8E4M3FN
+  // PYPTO: %[[NARROW:.*]] = pypto.cast %arg0 : !pypto.tile<f32, [1, 32]> to !pypto.tile<f8E4M3FN, [1, 32]>
+  // PYPTO: pypto.store %[[NARROW]], %arg1[{{.*}}] : !pypto.tile<f8E4M3FN, [1, 32]>, memref<1x32xf8E4M3FN>
+  // PYPTO: pypto.cast %[[NARROW]] : !pypto.tile<f8E4M3FN, [1, 32]> to !pypto.tile<f32, [1, 32]>
+  // PYPTO: pypto.tile_full "0.0" : !pypto.tile<f8E4M3FN, [1, 32]>
+
+  %c0 = arith.constant 0 : index
+  %zero = arith.constant 0.0 : f8E4M3FN
+  %narrow = npuvector.truncf %arg0 : !npuvector<1x32xf32> to !npuvector<1x32xf8E4M3FN>
+  npuvector.transfer_write %narrow, %arg1[%c0, %c0] : !npuvector<1x32xf8E4M3FN>, memref<1x32xf8E4M3FN>
+  %wide = npuvector.extf %narrow : !npuvector<1x32xf8E4M3FN> to !npuvector<1x32xf32>
+  npuvector.transfer_write %wide, %arg2[%c0, %c0] : !npuvector<1x32xf32>, memref<1x32xf32>
+  %full = npuvector.broadcast %zero : f8E4M3FN to !npuvector<1x32xf8E4M3FN>
+  npuvector.transfer_write %full, %arg3[%c0, %c0] : !npuvector<1x32xf8E4M3FN>, memref<1x32xf8E4M3FN>
+  return
+}
+
+// -----
+
+// E5M2 must retain its distinct dtype through the same conversion path.
+func.func @test_fp8_e5m2(%arg0 : !npuvector<1x32xf32>, %arg1 : memref<1x32xf8E5M2>, %arg2 : memref<1x32xf32>, %arg3 : memref<1x32xf8E5M2>) {
+  // CHECK-LABEL: func.func @test_fp8_e5m2(
+  // CHECK-SAME: %arg1: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP8E5M2
+  // CHECK-SAME: %arg3: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP8E5M2
+  // CHECK: %[[NARROW:.*]] = emitpy.call_opaque "pl.cast"({{.*}}) {{.*}}"pl.FP8E5M2"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[NARROW]], %arg1)
+  // CHECK: %[[WIDE:.*]] = emitpy.call_opaque "pl.cast"(%[[NARROW]]) {{.*}}"pl.FP32"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[WIDE]], %arg2)
+  // CHECK: %[[ZERO:.*]] = emitpy.call_opaque "pl.tile.full"() {{.*}}"pl.FP8E5M2"{{.*}}"0.0"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[ZERO]], %arg3)
+  // PYPTO-LABEL: func.func @test_fp8_e5m2(
+  // PYPTO: pypto.constant "0.0" : f8E5M2
+  // PYPTO: %[[NARROW:.*]] = pypto.cast %arg0 : !pypto.tile<f32, [1, 32]> to !pypto.tile<f8E5M2, [1, 32]>
+  // PYPTO: pypto.store %[[NARROW]], %arg1[{{.*}}] : !pypto.tile<f8E5M2, [1, 32]>, memref<1x32xf8E5M2>
+  // PYPTO: pypto.cast %[[NARROW]] : !pypto.tile<f8E5M2, [1, 32]> to !pypto.tile<f32, [1, 32]>
+  // PYPTO: pypto.tile_full "0.0" : !pypto.tile<f8E5M2, [1, 32]>
+
+  %c0 = arith.constant 0 : index
+  %zero = arith.constant 0.0 : f8E5M2
+  %narrow = npuvector.truncf %arg0 : !npuvector<1x32xf32> to !npuvector<1x32xf8E5M2>
+  npuvector.transfer_write %narrow, %arg1[%c0, %c0] : !npuvector<1x32xf8E5M2>, memref<1x32xf8E5M2>
+  %wide = npuvector.extf %narrow : !npuvector<1x32xf8E5M2> to !npuvector<1x32xf32>
+  npuvector.transfer_write %wide, %arg2[%c0, %c0] : !npuvector<1x32xf32>, memref<1x32xf32>
+  %full = npuvector.broadcast %zero : f8E5M2 to !npuvector<1x32xf8E5M2>
+  npuvector.transfer_write %full, %arg3[%c0, %c0] : !npuvector<1x32xf8E5M2>, memref<1x32xf8E5M2>
+  return
+}
+
+// -----
+
 func.func @test_elementwise(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>, %arg2 : memref<32x32xf32>) {
   // CHECK-LABEL: func.func @test_elementwise(
   // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP32

@@ -1559,9 +1559,9 @@ def torch_where_self_str(inputs, output, attr):
     """gen torch where self string"""
     return (
         f"{output[0]['tensor_name']} = np.where("
-        f"{get_input(inputs[0][0])}, "
-        f"{get_input(inputs[1][0])}, "
-        f"{get_input(inputs[2][0])})"
+        f"{format_py_value(get_input(inputs[0][0]))}, "
+        f"{format_py_value(get_input(inputs[1][0]))}, "
+        f"{format_py_value(get_input(inputs[2][0]))})"
     )
 
 
@@ -1625,7 +1625,7 @@ def torch_vtensor_literal_str(inputs, output, attr):
     """gen torch vtensor literal string"""
     return (
         f"{output[0]['tensor_name']} = np.array("
-        f"{format_py_value(get_input(output[0]))}, dtype=np.{output[0]['data_type']})"
+        f"{format_py_value(get_input(output[0]))}, dtype=torch_normalize_dtype({output[0]['data_type']!r}))"
     )
 
 

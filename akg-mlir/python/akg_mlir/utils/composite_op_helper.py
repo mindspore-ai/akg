@@ -99,6 +99,12 @@ def compare_tensor(acu_output, exp_output, rtol=1.e-5, atol=1.e-8, equal_nan=Fal
             considered equal to NaN's in `b` in the output array.
     :return: True / False
     """
+    acu_output = np.asarray(acu_output)
+    exp_output = np.asarray(exp_output)
+    if acu_output.dtype.name.startswith("float8_") or exp_output.dtype.name.startswith("float8_"):
+        # Compare decoded values; FP8 arithmetic may round the error itself.
+        acu_output = acu_output.astype(np.float32)
+        exp_output = exp_output.astype(np.float32)
     res = np.allclose(acu_output, exp_output, rtol, atol, equal_nan)
     if not res:
         if exp_output.dtype == np.bool_:
@@ -609,12 +615,6 @@ def _pack_matrix(data, feature):
 def _gen_input_item(tensor_name, infos, shape, dtype, csr_idx_pair, input_mean_value):
     """Gen input item."""
     dtype = torch_normalize_dtype(dtype)
-    if dtype == "bfloat16":
-        try:
-            from bfloat16 import bfloat16  # pylint: disable=import-outside-toplevel
-        except ImportError as err:
-            raise ImportError("bfloat16 is not installed, install it first.") from err
-        dtype = bfloat16
     item = None
     if tensor_name in infos["clean_input"]:
         item = np.zeros(shape).astype(dtype)
@@ -693,12 +693,6 @@ def _gen_output_data(desc, infos, input_for_mod, output_indexes, commands):
         if infos["gen_data"]:
             shape = [1] if not output_desc["shape"] else output_desc["shape"]
             dtype = torch_normalize_dtype(output_desc["data_type"])
-            if dtype == "bfloat16":
-                try:
-                    from bfloat16 import bfloat16  # pylint: disable=import-outside-toplevel
-                except ImportError as err:
-                    raise ImportError("bfloat16 is not installed, install it first.") from err
-                dtype = bfloat16
             item = np.full(shape, np.nan, dtype)
             input_for_mod.append(item)
         if output_desc["tensor_name"] not in infos["fake_output_tensors"]:
@@ -786,6 +780,11 @@ def _gen_torch_op_compute(desc, commands):
         sent = dsl_fun(operation['input_desc'],
                        operation['output_desc'], attrs)
         commands.append(sent)
+        # Round every FP8 SSA result, including intermediates, to its IR format.
+        for output in operation['output_desc']:
+            if output.get('data_type', '').startswith('float8_'):
+                name = output['tensor_name']
+                commands.append(f"{name} = np.asarray({name}, dtype=torch_normalize_dtype({output['data_type']!r}))")
 
 
 def _update_inplace_tensors(infos, output_indexes, commands):
@@ -875,6 +874,7 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     uni_file_name = _gen_uniq_file_name(desc.get("op"))
     printer = CodePrinter(uni_file_name)
     printer.out("from akg.utils.op_dsl import *", False)
+    printer.out("from akg.utils.torch_mlir_utils import torch_normalize_dtype", True)
     if infos.get('bfloat16', False):
         printer.out("try:", True)
         printer.out("    from bfloat16 import bfloat16", True)

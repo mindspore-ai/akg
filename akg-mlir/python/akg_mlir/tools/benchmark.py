@@ -143,7 +143,13 @@ def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_
         dtype = _to_torch_dtype(parameter.dtype)
         if dtype is None:
             raise ValueError(f"unsupported benchmark dtype: {parameter.dtype}")
-        tensor = torch.from_numpy(np.array(array, copy=True)).to(dtype=dtype)
+        if array.dtype.name.startswith("float8_"):
+            if dtype != getattr(torch, array.dtype.name):
+                raise ValueError(f"FP8 buffer dtype {array.dtype} does not match compiled dtype {dtype}")
+            # PyTorch cannot import NumPy FP8 directly; preserve its storage bits.
+            tensor = torch.from_numpy(np.array(array, copy=True).view(np.uint8)).view(dtype)
+        else:
+            tensor = torch.from_numpy(np.array(array, copy=True)).to(dtype=dtype)
         # AKG represents scalar tensors as [1]; use the compiled ABI shape.
         tensor = tensor.reshape(tuple(parameter.shape)).to(f"npu:{device_id}")
         arguments.append(tensor)
@@ -154,7 +160,7 @@ def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_
         # Output indices refer to graph buffers, before appended workspaces.
         argument_index = index if index >= 0 else len(buffers) + index
         result = arguments[argument_index].detach().cpu()
-        if result.dtype == torch.bfloat16:
+        if result.dtype == torch.bfloat16 or str(result.dtype).startswith("torch.float8_"):
             result = result.float()
         buffers[index] = result.numpy().reshape(np.asarray(buffers[index]).shape)
 
@@ -257,7 +263,7 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
         if not kernel_name:
             raise RuntimeError(f"Cannot find `func.func @NAME(` in: {file_path}")
         info_file = dump_dir / f"{kernel_name}_.info"
-        run_torch_mlir_to_json(input_file, info_file)
+        run_torch_mlir_to_json(input_file, info_file, backend=getattr(compile_args, "ascend_backend", None))
         if compile_args.akg_fusion:
             input_file = dump_dir / f"{kernel_name}_linalg.mlir"
             run_torch_mlir_to_linalg_on_tensors(file_path, input_file)
