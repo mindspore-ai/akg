@@ -321,6 +321,7 @@ except FileNotFoundError:
 
 INSTALL_REQUIRES = [
     "numpy",
+    "ml_dtypes>=0.5.3,<0.6",
 ]
 
 EXT_MODULES = [

@@ -16,6 +16,7 @@
 import os
 import re
 import math
+import json
 import pathlib
 import subprocess
 import logging
@@ -59,9 +60,15 @@ def find_first_func_name(input_file: str) -> Optional[str]:
 
 
 def torch_normalize_dtype(dtype):
-    """Normalize a torch dtype string to a standard form."""
+    """Resolve a Torch dtype name for NumPy data and reference computations."""
     if dtype in ("int1", "i1"):
         return "bool"
+    if dtype.startswith("float8_"):
+        import ml_dtypes  # pylint: disable=import-outside-toplevel
+        return getattr(ml_dtypes, dtype)
+    if dtype == "bfloat16":
+        from bfloat16 import bfloat16  # pylint: disable=import-outside-toplevel
+        return bfloat16
     return dtype
 
 
@@ -147,7 +154,81 @@ def get_named_op_str(
         raise RuntimeError("bishengir-opt failed!") from e
 
 
-def run_torch_mlir_to_json(file_path, output_file):
+_MLIR_FLOAT8_DTYPES = {
+    "f8E5M2": "float8_e5m2",
+    "f8E4M3FN": "float8_e4m3fn",
+    "f8E5M2FNUZ": "float8_e5m2fnuz",
+    "f8E4M3FNUZ": "float8_e4m3fnuz",
+    "f8E8M0FNU": "float8_e8m0fnu",
+}
+
+
+def _torch_json_value_pairs(module, desc):
+    """Match TorchIR arguments, operation results and returns to JSON tensors."""
+    inputs = desc.get("input_desc") or []
+    json_operations = desc.get("op_desc") or []
+    functions = [op for op in module.body.operations
+                 if op.operation.name == "func.func"
+                 and op.attributes["sym_name"].value == desc["op"]]
+    if len(functions) != 1 or len(functions[0].regions[0].blocks) != 1:
+        raise ValueError("Cannot resolve FP8 formats from the torch-to-json function")
+    block = functions[0].regions[0].blocks[0]
+    operations = list(block.operations)
+    terminator = operations.pop()  # The block terminator is func.return.
+    if (len(block.arguments) != len(inputs) or len(operations) != len(json_operations)
+            or any(len(group) != 1 for group in inputs)):
+        raise ValueError("TorchIR and torch-to-json value counts differ while resolving FP8 formats")
+    values = list(zip(block.arguments, (group[0] for group in inputs)))
+    for operation, op_desc in zip(operations, json_operations):
+        # The exporter changes spelling such as broadcast_to -> broadcastTo.
+        native_name = re.sub(r"[^a-z0-9]", "", operation.operation.name.lower())
+        json_name = re.sub(r"[^a-z0-9]", "", op_desc["name"].lower())
+        outputs = op_desc.get("output_desc", [])
+        if native_name != json_name or len(operation.results) != len(outputs):
+            raise ValueError("TorchIR and torch-to-json operations differ while resolving FP8 formats")
+        values.extend(zip(operation.results, outputs))
+    outputs = desc.get("output_desc") or []
+    if outputs:
+        if len(terminator.operands) != len(outputs):
+            raise ValueError("TorchIR and torch-to-json output counts differ while resolving FP8 formats")
+        values.extend(zip(terminator.operands, outputs))
+    return values
+
+
+def _restore_float8_dtypes(module, desc, backend=None):
+    """Recover FP8 formats and check the selected backend's lowering support."""
+    inputs = desc.get("input_desc") or []
+    tensors = [tensor for group in inputs for tensor in group] + (desc.get("output_desc") or [])
+    for op in desc.get("op_desc") or []:
+        tensors.extend(tensor for group in op["input_desc"] for tensor in group)
+        tensors.extend(op["output_desc"])
+    fp8_tensors = [tensor for tensor in tensors if tensor["data_type"] == "float8"]
+    if not fp8_tensors:
+        return False
+    formats = {}
+    for value, tensor in _torch_json_value_pairs(module, desc):
+        if tensor["data_type"] == "float8":
+            # Older torch-mlir bindings expose Torch tensor types as opaque types.
+            element = str(value.type).rsplit(",", 1)[-1].removesuffix(">").strip()
+            dtype = _MLIR_FLOAT8_DTYPES.get(element)
+            if dtype is None:
+                raise ValueError(f"Unsupported FP8 format {element!r} for tensor {tensor['tensor_name']!r}")
+            # PyPTO has no FNUZ dtype; AKG's current LLVM has no E8M0 type.
+            if backend == "pypto" and element not in ("f8E4M3FN", "f8E5M2"):
+                raise ValueError(
+                    f"Unsupported FP8 format {element!r} for tensor {tensor['tensor_name']!r}: "
+                    "AKG PyPTO lowering supports only f8E4M3FN and f8E5M2"
+                )
+            formats[tensor["tensor_name"]] = dtype
+    for tensor in fp8_tensors:
+        dtype = formats.get(tensor["tensor_name"])
+        if dtype is None:
+            raise ValueError(f"Cannot resolve FP8 format for tensor {tensor['tensor_name']!r} from TorchIR")
+        tensor["data_type"] = dtype
+    return True
+
+
+def run_torch_mlir_to_json(file_path, output_file, backend=None):
     """
     Run torch-to-json pass by using torch-mlir Python wheel package.
 
@@ -155,6 +236,7 @@ def run_torch_mlir_to_json(file_path, output_file):
         file_path: input .mlir path.
         output_file: output info/json file path, for example
                      "/tmp/kernel_meta/model.info" or "model.info".
+        backend: optional Ascend backend used to validate FP8 lowering support.
 
     Returns:
         Path to the expected output file.
@@ -189,10 +271,13 @@ def run_torch_mlir_to_json(file_path, output_file):
             logging.debug("torch-to-json pipeline: %s", pipeline)
             pm = torch_mlir_pass_manager.parse(pipeline)
             pm.run(module.operation)
+            desc = json.loads(output_file.read_text(encoding="utf-8"))
+            if _restore_float8_dtypes(module, desc, backend):
+                output_file.write_text(json.dumps(desc), encoding="utf-8")
         logging.debug("torch-mlir to Json success")
     except Exception as exc:
         logging.error("torch-to-json failed!")
-        raise RuntimeError("torch-to-json failed!") from exc
+        raise RuntimeError(f"torch-to-json failed: {exc}") from exc
     return output_file
 
 
@@ -473,11 +558,13 @@ TORCH_DTYPE_TO_NUMPY = {
     # bfloat16 fallback
     15: "np.float32",
 
-    # float8 fallback
-    23: "np.float32",
-    24: "np.float32",
-    25: "np.float32",
-    26: "np.float32",
-    44: "np.float32",
+    # Quantize casts to the actual FP8 format in the reference computation.
+    23: "torch_normalize_dtype('float8_e5m2')",
+    24: "torch_normalize_dtype('float8_e4m3fn')",
+    25: "torch_normalize_dtype('float8_e5m2fnuz')",
+    26: "torch_normalize_dtype('float8_e4m3fnuz')",
+    44: "torch_normalize_dtype('float8_e8m0fnu')",
+
+    # Existing packed FP4 fallback; this enum is not an FP8 format.
     45: "np.float32",
 }

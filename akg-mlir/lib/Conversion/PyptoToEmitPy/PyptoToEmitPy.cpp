@@ -67,6 +67,12 @@ namespace {
 /// the vector-to-emitpy conversion library.
 static std::optional<std::string> pyptoDtypeName(Type type) {
   if (isa<FloatType>(type)) {
+    if (isa<Float8E4M3FNType>(type)) {
+      return std::string("pl.FP8E4M3FN");
+    }
+    if (isa<Float8E5M2Type>(type)) {
+      return std::string("pl.FP8E5M2");
+    }
     if (type.isF16()) {
       return std::string("pl.FP16");
     }

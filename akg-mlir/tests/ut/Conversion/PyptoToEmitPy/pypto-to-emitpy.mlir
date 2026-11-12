@@ -1,6 +1,52 @@
 // RUN: akg-opt %s -convert-pypto-to-emitpy | FileCheck %s
 // RUN: akg-opt %s -convert-pypto-to-emitpy | akg-translate --allow-unregistered-dialect --mlir-to-pypto | FileCheck %s --check-prefix=PYTHON
 
+// FP8 annotations, constants, allocation and casts keep the exact format in the DSL.
+func.func @fp8_e4m3fn(%arg0 : !pypto.tile<f8E4M3FN, [1, 32]>) {
+  // CHECK-LABEL: func.func @fp8_e4m3fn(
+  // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tile{{[^\"]*}}pl.FP8E4M3FN
+  // CHECK: emitpy.call_opaque "pl.const"() {{.*}}"1.0"{{.*}}"pl.FP8E4M3FN"
+  // CHECK: emitpy.call_opaque "pl.tile.full"() {{.*}}"[1, 32]"{{.*}}"pl.FP8E4M3FN"{{.*}}"0.0"
+  // CHECK: %[[WIDE:.*]] = emitpy.call_opaque "pl.cast"(%arg0) {{.*}}"pl.FP32"
+  // CHECK: emitpy.call_opaque "pl.cast"(%[[WIDE]]) {{.*}}"pl.FP8E4M3FN"
+  // PYTHON-LABEL: def fp8_e4m3fn(
+  // PYTHON: pl.const(1.0, pl.FP8E4M3FN)
+  // PYTHON: pl.tile.full([1, 32], pl.FP8E4M3FN, 0.0)
+  // PYTHON: [[WIDE:[a-zA-Z0-9_]+]] = pl.cast({{.*}}, pl.FP32)
+  // PYTHON: pl.cast([[WIDE]], pl.FP8E4M3FN)
+
+  %c = pypto.constant "1.0" : f8E4M3FN
+  %full = pypto.tile_full "0.0" : !pypto.tile<f8E4M3FN, [1, 32]>
+  %wide = pypto.cast %arg0 : !pypto.tile<f8E4M3FN, [1, 32]> to !pypto.tile<f32, [1, 32]>
+  %narrow = pypto.cast %wide : !pypto.tile<f32, [1, 32]> to !pypto.tile<f8E4M3FN, [1, 32]>
+  return
+}
+
+// -----
+
+// E5M2 uses its own PyPTO dtype rather than the E4M3FN spelling.
+func.func @fp8_e5m2(%arg0 : !pypto.tile<f8E5M2, [1, 32]>) {
+  // CHECK-LABEL: func.func @fp8_e5m2(
+  // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tile{{[^\"]*}}pl.FP8E5M2
+  // CHECK: emitpy.call_opaque "pl.const"() {{.*}}"1.0"{{.*}}"pl.FP8E5M2"
+  // CHECK: emitpy.call_opaque "pl.tile.full"() {{.*}}"[1, 32]"{{.*}}"pl.FP8E5M2"{{.*}}"0.0"
+  // CHECK: %[[WIDE:.*]] = emitpy.call_opaque "pl.cast"(%arg0) {{.*}}"pl.FP32"
+  // CHECK: emitpy.call_opaque "pl.cast"(%[[WIDE]]) {{.*}}"pl.FP8E5M2"
+  // PYTHON-LABEL: def fp8_e5m2(
+  // PYTHON: pl.const(1.0, pl.FP8E5M2)
+  // PYTHON: pl.tile.full([1, 32], pl.FP8E5M2, 0.0)
+  // PYTHON: [[WIDE:[a-zA-Z0-9_]+]] = pl.cast({{.*}}, pl.FP32)
+  // PYTHON: pl.cast([[WIDE]], pl.FP8E5M2)
+
+  %c = pypto.constant "1.0" : f8E5M2
+  %full = pypto.tile_full "0.0" : !pypto.tile<f8E5M2, [1, 32]>
+  %wide = pypto.cast %arg0 : !pypto.tile<f8E5M2, [1, 32]> to !pypto.tile<f32, [1, 32]>
+  %narrow = pypto.cast %wide : !pypto.tile<f32, [1, 32]> to !pypto.tile<f8E5M2, [1, 32]>
+  return
+}
+
+// -----
+
 // End-to-end check of the pypto -> emitpy lowering:
 //   pypto.load / pypto.store  ->  emitpy.call_opaque "pl.load" / "pl.store"
 //   !pypto.tile<f32, [4, 8]>  ->  !emitpy.opaque<"pl.Tile[[4, 8], pl.FP32]">
