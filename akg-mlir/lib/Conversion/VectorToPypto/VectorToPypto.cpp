@@ -47,6 +47,7 @@
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Transforms/DialectConversion.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -280,6 +281,35 @@ static Value createTmpTile(ConversionPatternRewriter &rewriter, Location loc, Ar
   return rewriter.create<pypto::CreateTileOp>(loc, pypto::TileType::get(rewriter.getContext(), elemType, shape))
     .getResult();
 }
+
+// Share backward shape results within an allocation query, including the
+// backward probes from its sibling walk. Rewrites can change the use graph,
+// so never retain the cache across queries.
+using AllocationShape = std::optional<SmallVector<int64_t>>;
+using AllocationCache = DenseMap<std::pair<Value, unsigned>, AllocationShape>;
+
+class AllocationQueryScope {
+ public:
+  AllocationQueryScope() {
+    if (!current) {
+      current = &local;
+    }
+  }
+
+  ~AllocationQueryScope() {
+    if (current == &local) {
+      current = nullptr;
+    }
+  }
+
+  static AllocationCache &cache() { return *current; }
+
+ private:
+  static thread_local AllocationCache *current;
+  AllocationCache local;
+};
+
+thread_local AllocationCache *AllocationQueryScope::current = nullptr;
 
 static std::optional<SmallVector<int64_t>> tileAllocationShape(Value v, unsigned depth = 0);
 
@@ -747,6 +777,7 @@ static void collectSiblingAllocationBoundsImpl(Value v, unsigned depth, SmallVec
 }
 
 static void collectSiblingAllocationBounds(Value v, unsigned depth, SmallVectorImpl<int64_t> &siblingBounds) {
+  AllocationQueryScope query;
   DenseSet<Value> visited;
   collectSiblingAllocationBoundsImpl(v, depth, siblingBounds, visited);
 }
@@ -1032,17 +1063,28 @@ static std::optional<SmallVector<int64_t>> npuReadAllocationShape(Value value, n
 /// bound, padded to whole 32-byte rows the way the allocation will be.
 /// Element-wise users, casts and loop-carried accumulators keep the
 /// allocation of the read they combine.
-static std::optional<SmallVector<int64_t>> tileAllocationShape(Value v, unsigned depth) {
-  // The budget covers the long element-wise chains a sibling query walks:
-  // a polynomial (sin/cos Taylor) between a broadcast's consumer and the
-  // load/carrier that carries the padded allocation spans dozens of
-  // keepsOperandAllocation hops, and cutting the walk short leaves the
-  // broadcast spelling the unpadded bound. The recursion stays linear in
-  // practice -- `allocationShapeFromOperands` returns the first operand
-  // that resolves -- so the headroom costs little.
+static AllocationShape computeTileAllocationShape(Value v, unsigned depth);
+
+static AllocationShape tileAllocationShape(Value v, unsigned depth) {
+  // Long elementwise chains need enough depth to reach the padded carrier
+  // that determines the allocation.
   if (depth > 64) {
     return std::nullopt;
   }
+  AllocationQueryScope query;
+  auto &cache = AllocationQueryScope::cache();
+  // Depth affects the remaining search budget. Queries made inside a read's
+  // sibling merge also suppress further merges, so keep those results separate.
+  auto key = std::make_pair(v, 2 * depth + !activeSiblingQueryReads().empty());
+  if (auto it = cache.find(key); it != cache.end()) {
+    return it->second;
+  }
+  auto shape = computeTileAllocationShape(v, depth);
+  cache.try_emplace(key, shape);
+  return shape;
+}
+
+static AllocationShape computeTileAllocationShape(Value v, unsigned depth) {
   if (auto tile = dyn_cast<pypto::TileType>(v.getType());
       tile && llvm::none_of(tile.getShape(), ShapedType::isDynamic)) {
     return SmallVector<int64_t>(tile.getShape());
