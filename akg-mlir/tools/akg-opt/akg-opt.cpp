@@ -28,6 +28,7 @@
 #include "akg/Dialect/MindSpore/Passes.h"
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
 #include "akg/Dialect/NPUVector/Passes.h"
+#include "akg/Dialect/Pypto/Passes.h"
 #include "akg/Dialect/Pypto/IR/Pypto.h"
 #include "akg/Dialect/Pypto/IR/PyptoOps.h"
 #include "akg/Dialect/Pypto/IR/PyptoTypes.h"
@@ -82,6 +83,7 @@ int main(int argc, char **argv) {
   mlir::registerAKGVectorPasses();
   mlir::registerAKGTensorPasses();
   mlir::registerAKGNPUVectorPasses();
+  mlir::registerAKGPyptoPasses();
 
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);

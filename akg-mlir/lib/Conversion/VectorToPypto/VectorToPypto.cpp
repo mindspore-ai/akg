@@ -26,6 +26,8 @@
 #include <sstream>
 #include <string>
 
+#include "akg/Dialect/Pypto/Passes.h"
+#include "mlir/Pass/PassManager.h"
 #include "akg/Dialect/EmitPy/IR/EmitPy.h"
 #include "akg/Dialect/EmitPy/IR/EmitPyOps.h"
 #include "akg/Dialect/EmitPy/IR/EmitPyTypes.h"
@@ -3812,6 +3814,10 @@ static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, Shape
                                         rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(*extents)), rewriter)
                     .getResult();
   SmallVector<Value> carrierValid = broadcastValidExtents(op, resultType, loc, rewriter);
+  if (resultType.hasStaticShape()) {
+    llvm::transform(resultType.getShape(), std::back_inserter(carrierValid),
+                    [&](int64_t dim) -> Value { return rewriter.create<arith::ConstantIndexOp>(loc, dim); });
+  }
   Value result;
   if (rowLift) {
     // A fresh `tile_full` is valid everywhere, but row expand demands
@@ -7001,6 +7007,9 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
     // cannot capture tile values; scalar constants would cross as runtime
     // Vars, losing the compile-time constant property.
     sinkConstantsIntoSpmd(funcOp);
+    OpPassManager alignment(func::FuncOp::getOperationName());
+    alignment.addPass(createPyptoAlignShapePass());
+    if (failed(runPipeline(alignment, funcOp))) signalPassFailure();
   }
 };
 
