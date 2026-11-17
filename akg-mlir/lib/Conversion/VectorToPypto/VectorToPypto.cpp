@@ -5691,8 +5691,7 @@ static LogicalResult getPrivateWorkspaceGrid(Operation *allocOp, Value result, M
   bool inParallel = allocOp->getParentOfType<scf::ForallOp>() ||
                     allocOp->getParentOfType<scf::ParallelOp>();
   if (inParallel) {
-    if (!blockIndex || !blockCount || !bufferType.hasStaticShape() || bufferType.getRank() == 0 ||
-        !bufferType.getLayout().isIdentity()) {
+    if (!blockIndex || !blockCount || !bufferType.hasStaticShape() || !bufferType.getLayout().isIdentity()) {
       return allocOp->emitOpError("private workspaces require a static contiguous buffer and a one-dimensional grid");
     }
     for (Operation *user : result.getUsers()) {
@@ -5709,7 +5708,13 @@ template <typename TransferOp>
 static void offsetWorkspaceTransfer(TransferOp transfer, Value offset, bool addLeadingDimension) {
   OpBuilder at(transfer);
   SmallVector<Value> indices(transfer.getIndices());
-  indices[0] = at.create<arith::AddIOp>(transfer.getLoc(), offset, indices[0]);
+  if (indices.empty()) {
+    // A rank-zero buffer's single element addresses the only dimension of
+    // its [1]-shaped row in the padded backing workspace.
+    indices.push_back(offset);
+  } else {
+    indices[0] = at.create<arith::AddIOp>(transfer.getLoc(), offset, indices[0]);
+  }
   if (addLeadingDimension) {
     indices.insert(indices.begin(), at.create<arith::ConstantIndexOp>(transfer.getLoc(), 0));
     if (auto map = transfer->template getAttrOfType<AffineMapAttr>("permutation_map")) {
@@ -5885,9 +5890,12 @@ static LogicalResult promoteAllocsToOutputs(func::FuncOp funcOp, Block &entry, D
     // An allocation inside a parallel region is private to each instance.
     // Preserve that ownership when exposing its backing storage in the ABI.
     // Pad each region to a cache line so scalar stores cannot share a line.
-    if (blockIndex && blockCount && bufferType.hasStaticShape() && bufferType.getRank() > 0) {
+    if (blockIndex && blockCount && bufferType.hasStaticShape()) {
       OpBuilder builder(allocOp);
       SmallVector<int64_t> shape(bufferType.getShape());
+      // A rank-zero buffer holds one scalar per block; treat it as a single
+      // element row so it gets its own padded slot in the backing workspace.
+      if (shape.empty()) shape.push_back(1);
       auto trailingShape = ArrayRef<int64_t>(shape).drop_front();
       int64_t rowBytes = std::accumulate(trailingShape.begin(), trailingShape.end(),
                                          int64_t(bufferType.getElementTypeBitWidth() / 8), std::multiplies<int64_t>());
