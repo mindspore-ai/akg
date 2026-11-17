@@ -87,6 +87,62 @@ def _load_bisheng_launch(kernel_name, output_dir, dynamic=False, torch_path=None
     return {"path": binary_path, "launcher": launch, "binary_path": binary_path, "metadata_path": metadata_path}
 
 
+def pypto_numpy_dtype(dtype):
+    """Return the host storage dtype for a compiled PyPTO parameter."""
+    from ..utils.torch_mlir_utils import torch_normalize_dtype  # pylint: disable=import-outside-toplevel
+
+    name = str(dtype)
+    name = {"fp16": "float16", "fp32": "float32", "fp64": "float64", "index": "int64",
+            "fp8e4m3fn": "float8_e4m3fn", "fp8e5m2": "float8_e5m2",
+            "fp8e8m0": "float8_e8m0fnu"}.get(name, name)
+    return np.dtype(torch_normalize_dtype(name))
+
+
+def _pack_pypto_host_arguments(kernel_name, parameters, arguments, host_tensor_indices):
+    """Borrow contiguous NumPy storage until the synchronous runtime call returns."""
+    # pylint: disable=import-outside-toplevel
+    from pypto.ir.param_info import _DATATYPE_TO_CTYPE, bind_complete_args
+    from pypto.pypto_core.ir import ParamDirection
+    from simpler.buffer import AddressSpace, TensorTransfer
+    from simpler.task_interface import ChipStorageTaskArgs, ChipTensor, DataType, scalar_to_uint64
+
+    arguments = bind_complete_args(arguments, parameters, caller_name=kernel_name)
+    packed = ChipStorageTaskArgs()
+    tensor_index = 0
+    for argument, parameter in zip(arguments, parameters):
+        if parameter.shape is None:
+            continue
+        dtype = pypto_numpy_dtype(parameter.dtype)
+        if not isinstance(argument, np.ndarray) or argument.dtype != dtype:
+            raise TypeError(f"Parameter {parameter.name!r} requires a NumPy array with dtype {dtype}")
+        if tuple(argument.shape) != tuple(parameter.shape):
+            raise ValueError(f"Parameter {parameter.name!r} expects shape {parameter.shape}, got {argument.shape}")
+        if not argument.flags.c_contiguous:
+            raise ValueError(f"Parameter {parameter.name!r} requires contiguous host storage")
+        if parameter.direction != ParamDirection.In and not argument.flags.writeable:
+            raise ValueError(f"Output parameter {parameter.name!r} requires writable host storage")
+        # BOOL shares the runtime's byte storage representation.
+        dtype_name = {"bool": "UINT8", "float8_e4m3fn": "FP8E4M3FN",
+                      "float8_e8m0fnu": "FP8E8M0"}.get(dtype.name, dtype.name.upper())
+        runtime_dtype = getattr(DataType, dtype_name, None)
+        if runtime_dtype is None:
+            raise TypeError(f"Unsupported PyPTO host tensor dtype: {parameter.dtype}")
+        shape = tuple(argument.shape)
+        if not 1 <= len(shape) <= 5:
+            shape = (argument.size,)
+        transfer = TensorTransfer.NONE if tensor_index in host_tensor_indices else TensorTransfer.H2D
+        packed.add_tensor(ChipTensor.make(argument.ctypes.data, shape, runtime_dtype,
+                                          address_space=AddressSpace.HOST), transfer=transfer)
+        tensor_index += 1
+    for argument, parameter in zip(arguments, parameters):
+        if parameter.shape is None:
+            from pypto.torch.interop import _scalar_value
+
+            value = _scalar_value(argument, parameter)
+            packed.add_scalar(scalar_to_uint64(_DATATYPE_TO_CTYPE[str(parameter.dtype)](value)))
+    return packed
+
+
 def _load_pypto_launch(kernel_name, output_dir, num_outputs=None, simulator=False, **_options):
     """Load a PyPTO kernel and return its simulator or device launcher."""
     # Keep optional PyPTO dependencies out of the binary backend's import path.
@@ -105,12 +161,10 @@ def _load_pypto_launch(kernel_name, output_dir, num_outputs=None, simulator=Fals
     from pypto.ir.param_info import _DATATYPE_TO_CTYPE
     from pypto.jit._artifact_manifest import BuildKind
     from pypto.runtime._prebuilt import load_prebuilt
-    from pypto.torch.interop import CallSignature
     from simpler.buffer import AddressSpace, TensorTransfer
-    from simpler.task_interface import (CallConfig, ChipStorageTaskArgs, ChipTensor, _ChipWorker,
+    from simpler.task_interface import (CallConfig, ChipStorageTaskArgs, ChipTensor, ChipWorker, _ChipWorker,
                                        _initialize_chip_runtime, scalar_to_uint64)
     from simpler_setup.runtime_builder import RuntimeBuilder
-    from simpler_setup.torch_interop import torch_dtype_to_datatype
 
     artifact.execution_capabilities.require(ArtifactExecutionMode.KERNEL)
     platform = artifact.platform
@@ -119,13 +173,37 @@ def _load_pypto_launch(kernel_name, output_dir, num_outputs=None, simulator=Fals
         raise ValueError(f"PyPTO kernel {kernel_name}: expected {num_outputs} outputs, got {actual_outputs}")
     chip_callable, runtime_name, runtime_config = load_prebuilt(
         artifact.output_dir, platform, BuildKind.SINGLE_CHIP)["."]
-    signature = CallSignature(artifact.metadata.parameters, return_aliases=artifact.metadata.return_aliases,
-                              caller_name=kernel_name, platform=platform)
+    signature = None
     binaries = RuntimeBuilder(platform).get_binaries(runtime_name)
     config = CallConfig()
     config.aicpu_thread_num = runtime_config.get("aicpu_thread_num", 0)
 
-    def launch(*args, stream):
+    def launch(*args, stream=None, device_id=None):
+        nonlocal signature
+        if any(isinstance(arg, np.ndarray) for arg in args) or all(
+                parameter.shape is None for parameter in artifact.metadata.parameters):
+            if stream is not None:
+                raise ValueError("PyPTO host launch owns its stream; do not supply a device stream")
+            packed = _pack_pypto_host_arguments(
+                kernel_name, artifact.metadata.parameters, args, runtime_config.get("host_tensor_indices", ()))
+            worker = ChipWorker()
+            try:
+                worker.init(device_id=int(os.environ.get("DEVICE_ID", "0")) if device_id is None else device_id,
+                            bins=binaries)
+                handle = worker.register_callable(chip_callable)
+                worker.run(handle, packed, config=config)
+            finally:
+                worker.finalize()
+            return
+
+        from pypto.torch.interop import CallSignature
+        from simpler_setup.torch_interop import torch_dtype_to_datatype
+
+        if signature is None:
+            signature = CallSignature(artifact.metadata.parameters, return_aliases=artifact.metadata.return_aliases,
+                                      caller_name=kernel_name, platform=platform)
+        if stream is None:
+            raise ValueError("PyPTO device tensor launch requires a device stream")
         caller_stream = int(stream)
         frame = signature.describe_call(args)
         worker = _ChipWorker()
@@ -494,6 +572,24 @@ def pypto_compile(input_file, output_dir, kernel_name, arch, dump_ir=False, simu
 def _execute_pypto_simulator(artifact, arguments):
     """Prefer the host C++ compiler installed alongside the benchmark's Python."""
     from pypto.runtime.runner import execute_compiled  # pylint: disable=import-outside-toplevel
+
+    if any(isinstance(argument, np.ndarray) for argument in arguments):
+        import torch  # pylint: disable=import-outside-toplevel
+        from pypto.ir.param_info import _to_torch_dtype  # pylint: disable=import-outside-toplevel
+
+        # The simulator accepts CPU Torch tensors. These views share the host
+        # arrays, including BF16/FP8 storage, so output writes reach the caller.
+        converted = []
+        for argument, parameter in zip(arguments, artifact.metadata.parameters):
+            if isinstance(argument, np.ndarray):
+                if argument.dtype.name == "bfloat16":
+                    argument = torch.from_numpy(argument.view(np.uint16)).view(_to_torch_dtype(parameter.dtype))
+                elif argument.dtype.name.startswith("float8_"):
+                    argument = torch.from_numpy(argument.view(np.uint8)).view(_to_torch_dtype(parameter.dtype))
+                else:
+                    argument = torch.from_numpy(argument)
+            converted.append(argument)
+        arguments = converted
 
     prefix = pathlib.Path(sys.prefix)
     compiler = prefix / "bin" / "g++"

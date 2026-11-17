@@ -91,10 +91,9 @@ def _is_matmul_op(desc):
     return False
 
 
-def _prepare_pypto_arguments(kernel_name, parameters, buffers, device):
+def _prepare_pypto_arguments(kernel_name, parameters, buffers):
     """Convert AKG buffers to the compiled ABI and allocate private workspaces."""
-    import torch  # pylint: disable=import-outside-toplevel
-    from pypto.ir.param_info import _to_torch_dtype  # pylint: disable=import-outside-toplevel
+    from akg.backends.ascend import pypto_numpy_dtype  # pylint: disable=import-outside-toplevel
 
     if len(parameters) < len(buffers):
         raise ValueError(f"{kernel_name}: compiled parameters={len(parameters)}, "
@@ -104,11 +103,9 @@ def _prepare_pypto_arguments(kernel_name, parameters, buffers, device):
         if index >= len(buffers):
             # Lowering appends private reduction workspaces to the ABI. These
             # are not graph inputs or results and need their physical size.
-            dtype = _to_torch_dtype(parameter.dtype)
-            if parameter.shape is None or dtype is None:
+            if parameter.shape is None:
                 raise ValueError(f"invalid workspace parameter: {parameter}")
-            arguments.append(torch.empty(tuple(parameter.shape), dtype=dtype,
-                                         device=device))
+            arguments.append(np.empty(tuple(parameter.shape), dtype=pypto_numpy_dtype(parameter.dtype)))
             continue
         buffer = buffers[index]
         if parameter.shape is None:
@@ -117,19 +114,12 @@ def _prepare_pypto_arguments(kernel_name, parameters, buffers, device):
         array = np.asarray(buffer)
         if array.dtype.name == "bfloat16":
             array = array.astype(np.float32)
-        dtype = _to_torch_dtype(parameter.dtype)
-        if dtype is None:
-            raise ValueError(f"unsupported benchmark dtype: {parameter.dtype}")
-        if array.dtype.name.startswith("float8_"):
-            if dtype != getattr(torch, array.dtype.name):
-                raise ValueError(f"FP8 buffer dtype {array.dtype} does not match compiled dtype {dtype}")
-            # PyTorch cannot import NumPy FP8 directly; preserve its storage bits.
-            tensor = torch.from_numpy(np.array(array, copy=True).view(np.uint8)).view(dtype)
-        else:
-            tensor = torch.from_numpy(np.array(array, copy=True)).to(dtype=dtype)
+        dtype = pypto_numpy_dtype(parameter.dtype)
+        if array.dtype.name.startswith("float8_") and array.dtype != dtype:
+            raise ValueError(f"FP8 buffer dtype {array.dtype} does not match compiled dtype {dtype}")
+        array = np.array(array, dtype=dtype, copy=True, order="C")
         # AKG represents scalar tensors as [1]; use the compiled ABI shape.
-        tensor = tensor.reshape(-1).to(device).view(tuple(parameter.shape))
-        arguments.append(tensor)
+        arguments.append(array.reshape(tuple(parameter.shape)))
     return arguments
 
 
@@ -142,14 +132,11 @@ def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_
     """
     # Load optional PTO dependencies only when this backend is selected.
     # pylint: disable=import-outside-toplevel
-    import torch
     from akg.backends.ascend import ascend_compile
     from pypto.ir.compiled_artifact import CompiledArtifact
 
     simulator = getattr(options, "simulator", False)
     output_dir = pathlib.Path(output_dir)
-    if not simulator:
-        import torch_npu  # pylint: disable=unused-import
 
     compiled = ascend_compile(
         str(input_file), str(output_dir), kernel_name=kernel_name, arch=arch or None,
@@ -158,28 +145,21 @@ def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_
         dump_ir_path=str(output_dir / f"{kernel_name}_opt.log"),
         num_outputs=len(output_indexes), simulator=simulator)
     artifact = CompiledArtifact.from_dir(compiled.path)
+    arguments = _prepare_pypto_arguments(kernel_name, artifact.metadata.parameters, buffers)
     if simulator:
-        device = "cpu"
+        compiled.launcher(*arguments)
     else:
         device_id = getattr(options, "device_id", None)
         if device_id is None:
             device_id = int(os.environ.get("DEVICE_ID", "0"))
-        torch.npu.set_device(device_id)
-        device = f"npu:{device_id}"
-    arguments = _prepare_pypto_arguments(kernel_name, artifact.metadata.parameters, buffers, device)
-    if simulator:
-        compiled.launcher(*arguments)
-    else:
-        stream = torch.npu.current_stream(device_id)
-        compiled.launcher(*arguments, stream=stream.npu_stream)
-        stream.synchronize()
+        compiled.launcher(*arguments, device_id=device_id)
     for index in output_indexes:
         # Output indices refer to graph buffers, before appended workspaces.
         argument_index = index if index >= 0 else len(buffers) + index
-        result = arguments[argument_index].detach().cpu()
-        if result.dtype == torch.bfloat16 or str(result.dtype).startswith("torch.float8_"):
-            result = result.float()
-        buffers[index] = result.numpy().reshape(np.asarray(buffers[index]).shape)
+        result = arguments[argument_index]
+        if result.dtype.name == "bfloat16" or result.dtype.name.startswith("float8_"):
+            result = result.astype(np.float32)
+        buffers[index] = result.reshape(np.asarray(buffers[index]).shape)
 
 
 def run_a_kernel(desc, file_path, compile_args, static_desc=None):
