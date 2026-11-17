@@ -6667,7 +6667,7 @@ static void sinkConstantsIntoSpmd(func::FuncOp funcOp) {
 /// an spmd region, the whole chain belongs inside that region instead:
 /// the bf16 tensor then crosses as a plain kernel input (`add_input` has
 /// no dtype restriction) and the read/cast run in the kernel, where they
-/// lower to native MLIR bf16 ops (`pto.load` / `arith.extf`).
+/// can use a device tile conversion.
 static void sinkBf16ReadCastsIntoSpmd(func::FuncOp funcOp) {
   for (pypto::SpmdOp spmd : llvm::to_vector(funcOp.getOps<pypto::SpmdOp>())) {
     Block *parent = spmd->getBlock();
@@ -6733,6 +6733,81 @@ static void sinkBf16ReadCastsIntoSpmd(func::FuncOp funcOp) {
         anchor = op;
       }
       read->moveBefore(anchor);
+    }
+  }
+}
+
+/// Widen one aligned BF16 block on the AIV before extracting its scalar.
+/// BiSheng rejects scalar BF16-to-FP32 casts. Only static dense
+/// memrefs are handled here; other layouts retain the original scalar cast.
+static void widenBf16VectorReads(func::FuncOp funcOp) {
+  const int64_t blockElements = alignExtentTo32B(1, /*elemBytes=*/2);
+  SmallVector<pypto::CastOp> casts;
+  funcOp.walk([&](pypto::CastOp castOp) {
+    if (castOp.getResult().getType().isF32() && castOp.getSource().getType().isBF16() &&
+        castOp->getParentOfType<pypto::SpmdOp>()) {
+      casts.push_back(castOp);
+    }
+  });
+  for (pypto::CastOp castOp : casts) {
+    auto read = castOp.getSource().getDefiningOp<pypto::ReadOp>();
+    if (!read) {
+      continue;
+    }
+    Value source = read.getSource();
+    auto type = dyn_cast<MemRefType>(source.getType());
+    if (!type || type.getRank() == 0 || !type.hasStaticShape() || !type.getLayout().isIdentity() ||
+        read.getIndices().size() != static_cast<size_t>(type.getRank())) {
+      continue;
+    }
+    int64_t rowElements = type.getShape().back();
+    if (rowElements <= 0) {
+      continue;
+    }
+
+    // Keep the read at its original position relative to writes. The DMA
+    // starts at the block containing the index and reads only valid elements.
+    OpBuilder builder(read);
+    Location loc = read.getLoc();
+    Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+    SmallVector<Value> offsets(read.getIndices());
+    SmallVector<Value> coordinates(type.getRank(), zero);
+    Value column = offsets.back();
+    coordinates.back() = column;
+    offsets.back() = zero;
+    Value blockSize;
+    if (rowElements > blockElements) {
+      blockSize = builder.create<arith::ConstantIndexOp>(loc, blockElements);
+      coordinates.back() = builder.create<arith::RemSIOp>(loc, column, blockSize);
+      offsets.back() = builder.create<arith::SubIOp>(loc, column, coordinates.back());
+    }
+    SmallVector<int64_t> shape(type.getRank(), 1);
+    shape.back() = blockElements;
+    auto bf16Tile = pypto::TileType::get(builder.getContext(), builder.getBF16Type(), shape);
+    auto fp32Tile = pypto::TileType::get(builder.getContext(), builder.getF32Type(), shape);
+    SmallVector<Value> padded, valid;
+    if (rowElements % blockElements != 0) {
+      Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+      Value rowSize = builder.create<arith::ConstantIndexOp>(loc, rowElements);
+      padded.assign(type.getRank(), one);
+      valid.assign(type.getRank(), one);
+      if (blockSize) {
+        padded.back() = blockSize;
+        Value remaining = builder.create<arith::SubIOp>(loc, rowSize, offsets.back());
+        valid.back() = builder.create<pypto::MinOp>(loc, builder.getIndexType(), remaining, blockSize);
+      } else {
+        padded.back() = builder.create<arith::ConstantIndexOp>(loc, blockElements);
+        valid.back() = rowSize;
+      }
+    }
+    Value tile = builder.create<pypto::LoadOp>(loc, bf16Tile, source, ValueRange(offsets), ValueRange(padded),
+                                              ValueRange(valid));
+    Value widened = builder.create<pypto::CastOp>(loc, fp32Tile, tile);
+    Value scalar = builder.create<pypto::ReadOp>(loc, builder.getF32Type(), widened, ValueRange(coordinates));
+    castOp.getResult().replaceAllUsesWith(scalar);
+    castOp.erase();
+    if (read->use_empty()) {
+      read.erase();
     }
   }
 }
@@ -6917,8 +6992,9 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
     // constants feeding a sunk read follow it inside and stay literals:
     // the host emitter materializes such a read as a `bfloat16_t` C++
     // scalar that the host compiler cannot work with, while the kernel
-    // reads it from a plain tensor input and casts it natively.
+    // reads it from a plain tensor input.
     sinkBf16ReadCastsIntoSpmd(funcOp);
+    widenBf16VectorReads(funcOp);
 
     // Sink tile constants that only feed an spmd body into that body: the
     // DSL lowers `with pl.spmd(N):` into a standalone InCore function that

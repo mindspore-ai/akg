@@ -1005,13 +1005,18 @@ func.func @test_padded_cmp_narrow_cast(%arg0 : memref<1x6xf32>, %arg1 : memref<1
 
 // -----
 
-// A one-element masked fill keeps both floating casts and the selection scalar inside the kernel.
+// Widen the BF16 block containing the input element before the masked fill.
 func.func @scalar_bf16_masked_fill(%mask : memref<32xi8>, %input : memref<32xbf16>, %output : memref<32xbf16>, %offset : index) {
   // PYPTO-LABEL: func.func @scalar_bf16_masked_fill(
   // PYPTO: pypto.spmd (%{{.*}}) in (1) {
   // PYPTO: %[[MASK:.*]] = pypto.read %arg0[%arg3] : memref<32xi8> -> i8
-  // PYPTO: %[[INPUT:.*]] = pypto.read %arg1[%arg3] : memref<32xbf16> -> bf16
-  // PYPTO: %[[WIDE:.*]] = pypto.cast %[[INPUT]] : bf16 to f32
+  // PYPTO-NEXT: %[[ZERO:[a-zA-Z0-9_]+]] = arith.constant 0 : index
+  // PYPTO-NEXT: %[[BLOCK_SIZE:.*]] = arith.constant 16 : index
+  // PYPTO-NEXT: %[[COLUMN:.*]] = arith.remsi %arg3, %[[BLOCK_SIZE]] : index
+  // PYPTO-NEXT: %[[START:.*]] = arith.subi %arg3, %[[COLUMN]] : index
+  // PYPTO-NEXT: %[[INPUT:.*]] = pypto.load %arg1[%[[START]]] : memref<32xbf16> -> !pypto.tile<bf16, [16]>
+  // PYPTO-NEXT: %[[WIDE_TILE:.*]] = pypto.cast %[[INPUT]] : !pypto.tile<bf16, [16]> to !pypto.tile<f32, [16]>
+  // PYPTO-NEXT: %[[WIDE:.*]] = pypto.read %[[WIDE_TILE]][%[[COLUMN]]] : !pypto.tile<f32, [16]> -> f32
   // PYPTO: %[[COND:.*]] = arith.cmpi ne, %[[MASK]], {{.*}} : i8
   // PYPTO: %[[SELECTED:.*]] = arith.select %[[COND]], {{.*}}, %[[WIDE]] : f32
   // PYPTO: %[[RESULT:.*]] = pypto.cast %[[SELECTED]] : f32 to bf16
@@ -1032,6 +1037,31 @@ func.func @scalar_bf16_masked_fill(%mask : memref<32xi8>, %input : memref<32xbf1
     %selected = npuvector.select %condition, %fill, %wide : !npuvector<1xi1>, !npuvector<1xf32>
     %result = npuvector.truncf %selected : !npuvector<1xf32> to !npuvector<1xbf16>
     npuvector.transfer_write %result, %output[%offset] : !npuvector<1xbf16>, memref<32xbf16>
+  }
+  return
+}
+
+// -----
+
+// A partial final BF16 block must not read beyond the logical row.
+func.func @scalar_bf16_wide_row(%input : memref<1x1000xbf16>, %output : memref<1x1000xf32>, %offset : index) {
+  // PYPTO-LABEL: func.func @scalar_bf16_wide_row(
+  // PYPTO: %[[SIZE:.*]] = arith.constant 16 : index
+  // PYPTO: %[[COL:.*]] = arith.remsi %arg2, %[[SIZE]] : index
+  // PYPTO: %[[START:.*]] = arith.subi %arg2, %[[COL]] : index
+  // PYPTO: %[[WIDTH:.*]] = arith.constant 1000 : index
+  // PYPTO: %[[LEFT:.*]] = arith.subi %[[WIDTH]], %[[START]] : index
+  // PYPTO: %[[VALID:.*]] = pypto.min %[[LEFT]], %[[SIZE]]
+  // PYPTO: %[[BLOCK:.*]] = pypto.load %arg0[{{.*}}, %[[START]]] padded[{{.*}}, %[[SIZE]]] valid[{{.*}}, %[[VALID]]] : memref<1x1000xbf16> -> !pypto.tile<bf16, [1, 16]>
+  // PYPTO: %[[FP32:.*]] = pypto.cast %[[BLOCK]] : !pypto.tile<bf16, [1, 16]> to !pypto.tile<f32, [1, 16]>
+  // PYPTO: pypto.read %[[FP32]][{{.*}}, %[[COL]]] : !pypto.tile<f32, [1, 16]> -> f32
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %zero = arith.constant 0.0 : bf16
+  scf.parallel (%block) = (%c0) to (%c1) step (%c1) {
+    %value = npuvector.transfer_read %input[%c0, %offset] [%c1, %c1] [%c1, %c1], %zero : memref<1x1000xbf16>, !npuvector<1x1xbf16>
+    %wide = npuvector.extf %value : !npuvector<1x1xbf16> to !npuvector<1x1xf32>
+    npuvector.transfer_write %wide, %output[%c0, %offset] : !npuvector<1x1xf32>, memref<1x1000xf32>
   }
   return
 }
