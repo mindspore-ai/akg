@@ -28,6 +28,7 @@ __all__ = [
 ]
 
 import os
+import sys
 import re
 import hashlib
 import pathlib
@@ -86,12 +87,21 @@ def _load_bisheng_launch(kernel_name, output_dir, dynamic=False, torch_path=None
     return {"path": binary_path, "launcher": launch, "binary_path": binary_path, "metadata_path": metadata_path}
 
 
-def _load_pypto_launch(kernel_name, output_dir, num_outputs=None, **_options):
-    """Load a prebuilt kernel and execute borrowed buffers on the caller's stream."""
+def _load_pypto_launch(kernel_name, output_dir, num_outputs=None, simulator=False, **_options):
+    """Load a PyPTO kernel and return its simulator or device launcher."""
     # Keep optional PyPTO dependencies out of the binary backend's import path.
     # pylint: disable=import-outside-toplevel
-    from pypto._artifact_contract import ArtifactExecutionMode
     from pypto.ir.compiled_artifact import CompiledArtifact
+
+    build_dir = _pypto_build_dir(kernel_name, output_dir)
+    artifact = CompiledArtifact.from_dir(build_dir)
+    if simulator:
+        def launch_simulator(*args, stream=None):  # pylint: disable=unused-argument
+            _execute_pypto_simulator(artifact, list(args))
+
+        return {"path": str(artifact.output_dir), "launcher": launch_simulator, "supports_autotune": False}
+
+    from pypto._artifact_contract import ArtifactExecutionMode
     from pypto.ir.param_info import _DATATYPE_TO_CTYPE
     from pypto.jit._artifact_manifest import BuildKind
     from pypto.runtime._prebuilt import load_prebuilt
@@ -102,8 +112,6 @@ def _load_pypto_launch(kernel_name, output_dir, num_outputs=None, **_options):
     from simpler_setup.runtime_builder import RuntimeBuilder
     from simpler_setup.torch_interop import torch_dtype_to_datatype
 
-    build_dir = os.path.join(output_dir, kernel_name + "_build")
-    artifact = CompiledArtifact.from_dir(build_dir)
     artifact.execution_capabilities.require(ArtifactExecutionMode.KERNEL)
     platform = artifact.platform
     actual_outputs = len(artifact.metadata.return_aliases)
@@ -446,7 +454,11 @@ def bisheng_compile(input_file,
     dump_ascend_meta_data(output_dir, kernel_name, block_dim=block_dim)
 
 
-def pypto_compile(input_file, output_dir, kernel_name, arch, dump_ir=False, **_options):
+def _pypto_build_dir(kernel_name, output_dir):
+    return os.path.join(output_dir, kernel_name + "_build")
+
+
+def pypto_compile(input_file, output_dir, kernel_name, arch, dump_ir=False, simulator=False, **_options):
     """Translate optimized AKG IR and save the compiled PyPTO kernel."""
     # pylint: disable=import-outside-toplevel
     from pypto._artifact_contract import ArtifactExecutionMode
@@ -464,13 +476,41 @@ def pypto_compile(input_file, output_dir, kernel_name, arch, dump_ir=False, **_o
         raise RuntimeError(f"Cannot execute {command[0]}; ensure akg-translate is installed and executable") from error
     function = runpy.run_path(output_file)[kernel_name]
     platform = "a5" if _is_reg_based_arch(arch) else "a2a3"
-    build_dir = os.path.join(output_dir, kernel_name + "_build")
+    if simulator:
+        platform += "sim"
+    build_dir = _pypto_build_dir(kernel_name, output_dir)
     # A failed rebuild must not pair fresh metadata with stale binaries.
     (pathlib.Path(build_dir) / BINARY_MANIFEST).unlink(missing_ok=True)
     artifact = _compile_artifact(
         function.specialize(), contract=ArtifactExecutionMode.KERNEL, platform=platform,
         output_dir=build_dir, dump_passes=dump_ir)
-    prepare_prebuilt(pathlib.Path(artifact.output_dir), platform, BuildKind.SINGLE_CHIP)
+    if not simulator:
+        prepare_prebuilt(pathlib.Path(artifact.output_dir), platform, BuildKind.SINGLE_CHIP)
+
+
+def _execute_pypto_simulator(artifact, arguments):
+    """Prefer the host C++ compiler installed alongside the benchmark's Python."""
+    from pypto.runtime.runner import execute_compiled  # pylint: disable=import-outside-toplevel
+
+    prefix = pathlib.Path(sys.prefix)
+    compiler = prefix / "bin" / "g++"
+    if not (prefix / "conda-meta").is_dir() or not compiler.is_file() or not os.access(compiler, os.X_OK):
+        execute_compiled(artifact.output_dir, arguments, platform=artifact.platform, device_id=0)
+        return
+
+    from simpler_setup.toolchain import Gxx15Toolchain  # pylint: disable=import-outside-toplevel
+
+    original_init = Gxx15Toolchain.__init__
+
+    def init_with_compiler(toolchain):
+        original_init(toolchain)
+        toolchain.cxx_path = str(compiler)
+
+    Gxx15Toolchain.__init__ = init_with_compiler
+    try:
+        execute_compiled(artifact.output_dir, arguments, platform=artifact.platform, device_id=0)
+    finally:
+        Gxx15Toolchain.__init__ = original_init
 
 
 def ascend_compile(
@@ -487,7 +527,8 @@ def ascend_compile(
     need_compile=True,
     kernel_name=None,
     torch_path=None,
-    num_outputs=None):
+    num_outputs=None,
+    simulator=False):
     """
     Run MLIR compile for Ascend backend.
 
@@ -500,6 +541,7 @@ def ascend_compile(
         mlir_timing: Whether to print every pass time
         dump_ir_path: Path to dump log file (optional)
         opt_level: Ascend optimization level passed to the C++ pipeline
+        simulator: Compile and launch a static PyPTO kernel on the CPU simulator
 
     Returns:
         KernelLaunch with a callable and optional binary paths.
@@ -508,12 +550,17 @@ def ascend_compile(
         RuntimeError: If compile execution fails
     """
 
+    if simulator and (backend != "pypto" or dyn_shape):
+        raise ValueError("Simulator mode requires the PyPTO backend and static shapes")
     if backend == "pypto":
-        compile_backend, load_backend = pypto_compile, _load_pypto_launch
+        compile_backend = pypto_compile
+        load_backend = _load_pypto_launch
     elif backend == "bisheng":
         compile_backend, load_backend = bisheng_compile, _load_bisheng_launch
     else:
         raise ValueError(f"Unknown Ascend backend: {backend}")
+    if simulator:
+        arch = arch or "Ascend910B1"
     name = kernel_name or pathlib.Path(input_file).stem
     opt_file = os.path.join(output_dir, name + "_opt.mlir")
     if need_compile:
@@ -521,11 +568,13 @@ def ascend_compile(
         akg_opt(input_file, opt_file, dyn_shape=dyn_shape, enable_loop_fusion=enable_loop_fusion,
                 arch=arch, dump_ir=dump_ir, mlir_timing=mlir_timing, dump_ir_path=dump_ir_path,
                 opt_level=opt_level, backend=backend)
+        compile_options = {"simulator": True} if simulator else {}
         compile_backend(opt_file, output_dir, kernel_name=name,
                         arch=arch, dump_ir=dump_ir, dyn_shape=dyn_shape,
-                        enable_hfusion_compile=not enable_loop_fusion, dump_ir_path=dump_ir_path)
+                        enable_hfusion_compile=not enable_loop_fusion, dump_ir_path=dump_ir_path,
+                        **compile_options)
     return KernelLaunch(**load_backend(name, output_dir, dynamic=dyn_shape, torch_path=torch_path,
-                                      num_outputs=num_outputs))
+                                      num_outputs=num_outputs, simulator=simulator))
 
 
 def _get_device_shape_for_dyn(data, kernel_name, work_dir):

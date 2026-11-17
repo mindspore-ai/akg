@@ -91,37 +91,14 @@ def _is_matmul_op(desc):
     return False
 
 
-def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_indexes, options):
-    """Compile and run once, copying only result buffers back for AKG comparison.
+def _prepare_pypto_arguments(kernel_name, parameters, buffers, device):
+    """Convert AKG buffers to the compiled ABI and allocate private workspaces."""
+    import torch  # pylint: disable=import-outside-toplevel
+    from pypto.ir.param_info import _to_torch_dtype  # pylint: disable=import-outside-toplevel
 
-    The compiled parameter contract supplies physical shapes and dtypes. In
-    particular BF16 must never be inferred from an FP32 NumPy reference.
-    Inputs and the NumPy golden stay in memory throughout the benchmark.
-    """
-    # Load optional PTO dependencies only when this backend is selected.
-    # pylint: disable=import-outside-toplevel
-    import torch
-    import torch_npu  # pylint: disable=unused-import
-    from akg.backends.ascend import ascend_compile
-    from pypto.ir.compiled_artifact import CompiledArtifact
-    from pypto.ir.param_info import _to_torch_dtype
-    # pylint: enable=import-outside-toplevel
-
-    compiled = ascend_compile(
-        str(input_file), str(output_dir), kernel_name=kernel_name, arch=arch or None,
-        backend="pypto", opt_level=options.opt_level, enable_loop_fusion=True,
-        dump_ir=options.dump_ir, mlir_timing=options.mlir_timing,
-        dump_ir_path=str(pathlib.Path(output_dir) / f"{kernel_name}_opt.log"),
-        num_outputs=len(output_indexes))
-    artifact = CompiledArtifact.from_dir(compiled.path)
-    parameters = artifact.metadata.parameters
     if len(parameters) < len(buffers):
         raise ValueError(f"{kernel_name}: compiled parameters={len(parameters)}, "
                          f"benchmark buffers={len(buffers)}")
-    device_id = getattr(options, "device_id", None)
-    if device_id is None:
-        device_id = int(os.environ.get("DEVICE_ID", "0"))
-    torch.npu.set_device(device_id)
     arguments = []
     for index, parameter in enumerate(parameters):
         if index >= len(buffers):
@@ -131,7 +108,7 @@ def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_
             if parameter.shape is None or dtype is None:
                 raise ValueError(f"invalid workspace parameter: {parameter}")
             arguments.append(torch.empty(tuple(parameter.shape), dtype=dtype,
-                                         device=f"npu:{device_id}"))
+                                         device=device))
             continue
         buffer = buffers[index]
         if parameter.shape is None:
@@ -151,11 +128,51 @@ def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_
         else:
             tensor = torch.from_numpy(np.array(array, copy=True)).to(dtype=dtype)
         # AKG represents scalar tensors as [1]; use the compiled ABI shape.
-        tensor = tensor.reshape(tuple(parameter.shape)).to(f"npu:{device_id}")
+        tensor = tensor.reshape(tuple(parameter.shape)).to(device)
         arguments.append(tensor)
-    stream = torch.npu.current_stream(device_id)
-    compiled.launcher(*arguments, stream=stream.npu_stream)
-    stream.synchronize()
+    return arguments
+
+
+def run_pypto_kernel(input_file, output_dir, kernel_name, arch, buffers, output_indexes, options):
+    """Compile and run once, copying only result buffers back for AKG comparison.
+
+    The compiled parameter contract supplies physical shapes and dtypes. In
+    particular BF16 must never be inferred from an FP32 NumPy reference.
+    Inputs and the NumPy golden stay in memory throughout the benchmark.
+    """
+    # Load optional PTO dependencies only when this backend is selected.
+    # pylint: disable=import-outside-toplevel
+    import torch
+    from akg.backends.ascend import ascend_compile
+    from pypto.ir.compiled_artifact import CompiledArtifact
+
+    simulator = getattr(options, "simulator", False)
+    output_dir = pathlib.Path(output_dir)
+    if not simulator:
+        import torch_npu  # pylint: disable=unused-import
+
+    compiled = ascend_compile(
+        str(input_file), str(output_dir), kernel_name=kernel_name, arch=arch or None,
+        backend="pypto", opt_level=options.opt_level, enable_loop_fusion=True,
+        dump_ir=options.dump_ir, mlir_timing=options.mlir_timing,
+        dump_ir_path=str(output_dir / f"{kernel_name}_opt.log"),
+        num_outputs=len(output_indexes), simulator=simulator)
+    artifact = CompiledArtifact.from_dir(compiled.path)
+    if simulator:
+        device = "cpu"
+    else:
+        device_id = getattr(options, "device_id", None)
+        if device_id is None:
+            device_id = int(os.environ.get("DEVICE_ID", "0"))
+        torch.npu.set_device(device_id)
+        device = f"npu:{device_id}"
+    arguments = _prepare_pypto_arguments(kernel_name, artifact.metadata.parameters, buffers, device)
+    if simulator:
+        compiled.launcher(*arguments)
+    else:
+        stream = torch.npu.current_stream(device_id)
+        compiled.launcher(*arguments, stream=stream.npu_stream)
+        stream.synchronize()
     for index in output_indexes:
         # Output indices refer to graph buffers, before appended workspaces.
         argument_index = index if index >= 0 else len(buffers) + index
@@ -327,8 +344,8 @@ class TestUtils:
                 f.write(f"{format(get_core_num())}; ")
 
 
-def main(args=None):
-    """Main entry point for running kernel benchmark tests."""
+def _parse_args():
+    """Parse benchmark options and validate simulator selection."""
     # usage: python py_benchmark.py -e gpu --file ./info_cases/Fused_BiasAdd_1551558231201032373.info --prof_trails 100
     parser = argparse.ArgumentParser(description='Run cases')
     parser.add_argument("-e",
@@ -340,6 +357,8 @@ def main(args=None):
                         help="Hardware environment: cpu, gpu or ascend.")
     parser.add_argument("--ascend-backend", choices=["bisheng", "pypto"], default="bisheng",
                         help="Ascend compiler used for compilation and precision checking")
+    parser.add_argument("--simulator", "--sim", action="store_true",
+                        help="Run the Ascend PyPTO backend on the CPU simulator (default: off)")
     parser.add_argument("--arch", default="", help="Override target architecture in the descriptor")
     parser.add_argument("--device-id", type=int, default=None, help="NPU device (defaults to DEVICE_ID or 0)")
     parser.add_argument("-f", "--file", type=str, default="")
@@ -362,6 +381,16 @@ def main(args=None):
                         help="Ascend optimization level passed to --ascend-opt (default: 2). "
                              "Supports -O1/-O2 and -ol 1/-ol 2.")
     args = parser.parse_args()
+    if args.simulator:
+        if args.ascend_backend != "pypto" or args.backend not in ("", "ascend"):
+            parser.error("--simulator requires the Ascend PyPTO backend (--ascend-backend pypto)")
+        os.environ.setdefault("TORCH_DEVICE_BACKEND_AUTOLOAD", "0")
+    return args
+
+
+def main(args=None):
+    """Main entry point for running kernel benchmark tests."""
+    args = _parse_args()
     if args.device_id is not None:
         os.environ["DEVICE_ID"] = str(args.device_id)
     if args.dir:
