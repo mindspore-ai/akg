@@ -135,7 +135,10 @@ def _load_pypto_launch(kernel_name, output_dir, num_outputs=None, simulator=Fals
             packed = ChipStorageTaskArgs()
             for argument in frame.tensors:
                 tensor = argument.tensor
-                packed.add_tensor(ChipTensor.make(tensor.data_ptr(), tuple(tensor.shape),
+                shape = tuple(tensor.shape)
+                if not 1 <= len(shape) <= 5:
+                    shape = (tensor.numel(),)
+                packed.add_tensor(ChipTensor.make(tensor.data_ptr(), shape,
                                                  torch_dtype_to_datatype(tensor.dtype),
                                                  address_space=AddressSpace.DEVICE), transfer=TensorTransfer.NONE)
             for scalar in frame.scalars:
