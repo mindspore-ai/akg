@@ -273,12 +273,39 @@ static void replaceWithSliceOp(Operation *op, Value source, Value result, ArrayR
                                               mapped(rewriter, ValueRange(offsetValues)), dropDimsAttr);
 }
 
+// Align only the allocation; consumers retain their existing shape handling.
+static pypto::TileFullOp createAlignedTileFull(Location loc, Type type, StringAttr value, ValueRange extents,
+                                               ConversionPatternRewriter &rewriter) {
+  auto shaped = cast<ShapedType>(pyptoExtentType(type, extents));
+  SmallVector<int64_t> shape(shaped.getShape());
+  SmallVector<Value> allocation(extents);
+  if (!shape.empty()) {
+    int64_t tail = extents.empty() ? shape.back() : constIndexValue(extents.back()).value_or(ShapedType::kDynamic);
+    Type elemType = shaped.getElementType();
+    // BOOL occupies one byte; index lowers to INT64.
+    unsigned elemBits = isa<IndexType>(elemType) ? 64 : elemType.getIntOrFloatBitWidth();
+    int64_t aligned = alignExtentTo32B(tail, (elemBits + 7) / 8);
+    if (aligned != tail) {
+      shape.back() = aligned;
+      if (!allocation.empty()) {
+        allocation.back() = rewriter.create<arith::ConstantIndexOp>(loc, aligned);
+      }
+    }
+  }
+  return rewriter.create<pypto::TileFullOp>(loc, shaped.clone(shape), value, allocation);
+}
+
 /// Creates a scratch tile (`pypto.create_tile`); convert-pypto-to-emitpy
 /// lowers it into `pl.create_tile(shape, dtype=...,
 /// target_memory=pl.MemorySpace.Vec)`.
 static Value createTmpTile(ConversionPatternRewriter &rewriter, Location loc, ArrayRef<int64_t> shape, Type elemType) {
   assert(pyptoDtypeName(elemType) && "caller validated the element type");
-  return rewriter.create<pypto::CreateTileOp>(loc, pypto::TileType::get(rewriter.getContext(), elemType, shape))
+  SmallVector<int64_t> allocation(shape);
+  unsigned elemBits = isa<IndexType>(elemType) ? 64 : elemType.getIntOrFloatBitWidth();
+  if (!allocation.empty()) {
+    allocation.back() = alignExtentTo32B(allocation.back(), (elemBits + 7) / 8);
+  }
+  return rewriter.create<pypto::CreateTileOp>(loc, pypto::TileType::get(rewriter.getContext(), elemType, allocation))
     .getResult();
 }
 
@@ -1443,8 +1470,8 @@ static Value createMaskUnpackBranch(Location loc, Type type, ArrayRef<int64_t> a
     std::transform(allocation.begin(), allocation.end(), std::back_inserter(extents),
                    [&](int64_t physical) { return rewriter.create<arith::ConstantIndexOp>(loc, physical); });
   }
-  Value full = rewriter.create<pypto::TileFullOp>(loc, type, rewriter.getStringAttr(value),
-                                                  explicitAllocation ? ValueRange(extents) : ValueRange{});
+  Value full = createAlignedTileFull(loc, type, rewriter.getStringAttr(value),
+                                     explicitAllocation ? ValueRange(extents) : ValueRange{}, rewriter);
   if (validShape == allocation) {
     return full;
   }
@@ -1686,8 +1713,9 @@ class ArithConstantPattern : public OpConversionPattern<arith::ConstantOp> {
       }
       extents = ValueRange(raised);
     }
-    rewriter.replaceOpWithNewOp<pypto::TileFullOp>(op, pyptoExtentType(type, extents), rewriter.getStringAttr(*elem),
-                                                   extents);
+    rewriter.replaceOp(op, createAlignedTileFull(op.getLoc(), pyptoExtentType(type, extents),
+                                                 rewriter.getStringAttr(*elem), extents, rewriter)
+                             .getResult());
     return success();
   }
 };
@@ -3338,10 +3366,9 @@ static Value rowExpandOntoCarrier(ShapedType shapedResult, Location loc, StringR
     carrierFlatBounds.push_back(dynamicCols ? destBounds.back() : constant(carrierCols));
   }
   Value carrier =
-    rewriter
-      .create<pypto::TileFullOp>(
-        loc, pyptoExtentType(pyptoType(shapedResult.clone(carrierFlatShape)), ValueRange(carrierFlatBounds)),
-        rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(carrierFlatBounds)))
+    createAlignedTileFull(
+      loc, pyptoExtentType(pyptoType(shapedResult.clone(carrierFlatShape)), ValueRange(carrierFlatBounds)),
+      rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(carrierFlatBounds)), rewriter)
       .getResult();
   Value expanded =
     rewriter.create<pypto::RowExpandAddOp>(loc, pyptoType(shapedResult.clone(carrierFlatShape)), carrier, vecFlat)
@@ -3388,9 +3415,8 @@ static Value liftDroppedAxis(ShapedType shapedResult, Location loc, StringRef ze
     auto curShaped = cast<ShapedType>(cur.getType());
     Type expandType = curShaped.clone(targetShape);
     Value carrier =
-      rewriter
-        .create<pypto::TileFullOp>(loc, pyptoExtentType(expandType, ValueRange(targetBounds)),
-                                   rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(targetBounds)))
+      createAlignedTileFull(loc, pyptoExtentType(expandType, ValueRange(targetBounds)), rewriter.getStringAttr(zero),
+                            mapped(rewriter, ValueRange(targetBounds)), rewriter)
         .getResult();
     Value expanded =
       dropped + 1 == rank
@@ -3782,9 +3808,8 @@ static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, Shape
                                                 mapped(rewriter, op.getSource()),
                                                 mapped(rewriter, ValueRange(vecExtents)), ValueRange());
   std::string zero = isa<FloatType>(resultType.getElementType()) ? "0.0" : "0";
-  Value carrier = rewriter
-                    .create<pypto::TileFullOp>(loc, pyptoExtentType(convertedResult, ValueRange(*extents)),
-                                               rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(*extents)))
+  Value carrier = createAlignedTileFull(loc, pyptoExtentType(convertedResult, ValueRange(*extents)),
+                                        rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(*extents)), rewriter)
                     .getResult();
   SmallVector<Value> carrierValid = broadcastValidExtents(op, resultType, loc, rewriter);
   Value result;
@@ -3895,10 +3920,10 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
     convertedResult = pyptoExtentType(convertedResult, *extents);
 
     auto materializeFull = [&](StringRef value) -> Value {
-      Value full = rewriter
-                     .create<pypto::TileFullOp>(loc, pyptoExtentType(convertedResult, ValueRange(*extents)),
-                                                rewriter.getStringAttr(value), mapped(rewriter, ValueRange(*extents)))
-                     .getResult();
+      Value full =
+        createAlignedTileFull(loc, pyptoExtentType(convertedResult, ValueRange(*extents)),
+                              rewriter.getStringAttr(value), mapped(rewriter, ValueRange(*extents)), rewriter)
+          .getResult();
       if (validExtents.empty()) {
         return full;
       }
@@ -4390,9 +4415,8 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
     SmallVector<Value> carrierExtents =
       cmpCarrierExtents(resultType, lhsType, cmpLhs, rowLift, loc, pads, siblingBounds, rewriter);
     Value carrier =
-      rewriter
-        .create<pypto::TileFullOp>(loc, pyptoExtentType(valueTileType, ValueRange(carrierExtents)),
-                                   rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(carrierExtents)))
+      createAlignedTileFull(loc, pyptoExtentType(valueTileType, ValueRange(carrierExtents)),
+                            rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(carrierExtents)), rewriter)
         .getResult();
     // The carrier allocates the padded sibling shape while valueTileType
     // names the valid contract; re-view it back down to that valid region:
@@ -4870,9 +4894,8 @@ static Value materializeSelectBranch(Value branch, bool staticShape, Type conver
   if (!text) {
     return Value();
   }
-  return rewriter
-    .create<pypto::TileFullOp>(loc, pyptoExtentType(convertedResult, ValueRange{}), rewriter.getStringAttr(*text),
-                               ValueRange{})
+  return createAlignedTileFull(loc, pyptoExtentType(convertedResult, ValueRange{}), rewriter.getStringAttr(*text),
+                               ValueRange{}, rewriter)
     .getResult();
 }
 
@@ -4892,8 +4915,8 @@ static Value padSelectBranchFull(pypto::TileFullOp full, int64_t paddedCols, Arr
     extents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, allocation));
     validExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, validShape[axis]));
   }
-  auto paddedFull = rewriter.create<pypto::TileFullOp>(loc, pyptoExtentType(convertedResult, ValueRange(extents)),
-                                                       full.getValue(), mapped(rewriter, ValueRange(extents)));
+  auto paddedFull = createAlignedTileFull(loc, pyptoExtentType(convertedResult, ValueRange(extents)),
+                                          full.getValueAttr(), mapped(rewriter, ValueRange(extents)), rewriter);
   return rewriter.create<pypto::ReshapeOp>(loc, pyptoExtentType(convertedResult, ValueRange(extents)), paddedFull,
                                            mapped(rewriter, ValueRange(extents)),
                                            mapped(rewriter, ValueRange(validExtents)));
@@ -6474,18 +6497,19 @@ static void lowerZeroDimChains(func::FuncOp funcOp) {
         // their results with scalars, so an elementwise arith/math op
         // whose operands are all scalars is such a chain's tail -- and
         // an arith/math op with scalar operands and a tile result is
-        // otherwise never well-typed. npuvector comparisons and selects
-        // are the same kind of tail: their operands and result must
-        // share a shape, so all-scalar operands naming a size-1 tile
-        // result is again only a lowered chain's tail. Retype the
-        // result to the element type to keep the op verifiable;
-        // anything else may still be a genuine tile and keeps its
-        // shape.
+        // otherwise never well-typed.
+        // Keep casts, comparisons, and selects scalar when all inputs belong to this scalar chain.
+        // Otherwise a cast can reintroduce an unaligned [1] tile_full downstream.
+        // Preserve the types of unrelated tile results.
         StringRef ns = op->getDialect()->getNamespace();
         bool scalarChainTail =
           op->getNumOperands() > 0 &&
           llvm::all_of(op->getOperands(), [](Value operand) { return !isa<ShapedType>(operand.getType()); }) &&
-          ((ns == "arith" || ns == "math") || isa<npuvector::CmpFOp, npuvector::CmpIOp, npuvector::SelectOp>(op));
+          ((ns == "arith" || ns == "math") ||
+           isa<npuvector::ExtFOp, npuvector::TruncFOp, npuvector::ExtSIOp, npuvector::ExtUIOp, npuvector::TruncIOp,
+               npuvector::SIToFPOp, npuvector::UIToFPOp, npuvector::FPToSIOp, npuvector::FPToUIOp,
+               npuvector::IndexCastOp, npuvector::IndexCastUIOp, npuvector::CmpFOp, npuvector::CmpIOp,
+               npuvector::SelectOp>(op));
         if (!scalarChainTail) {
           continue;
         }

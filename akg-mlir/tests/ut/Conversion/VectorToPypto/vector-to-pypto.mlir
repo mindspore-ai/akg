@@ -1002,3 +1002,61 @@ func.func @test_padded_cmp_narrow_cast(%arg0 : memref<1x6xf32>, %arg1 : memref<1
   vector.transfer_write %legacy_byte, %arg4[%c0, %c0] : vector<2x8xi8>, memref<2x8xi8>
   return
 }
+
+// -----
+
+// A one-element masked fill keeps both floating casts and the selection scalar inside the kernel.
+func.func @scalar_bf16_masked_fill(%mask : memref<32xi8>, %input : memref<32xbf16>, %output : memref<32xbf16>, %offset : index) {
+  // PYPTO-LABEL: func.func @scalar_bf16_masked_fill(
+  // PYPTO: pypto.spmd (%{{.*}}) in (1) {
+  // PYPTO: %[[MASK:.*]] = pypto.read %arg0[%arg3] : memref<32xi8> -> i8
+  // PYPTO: %[[INPUT:.*]] = pypto.read %arg1[%arg3] : memref<32xbf16> -> bf16
+  // PYPTO: %[[WIDE:.*]] = pypto.cast %[[INPUT]] : bf16 to f32
+  // PYPTO: %[[COND:.*]] = arith.cmpi ne, %[[MASK]], {{.*}} : i8
+  // PYPTO: %[[SELECTED:.*]] = arith.select %[[COND]], {{.*}}, %[[WIDE]] : f32
+  // PYPTO: %[[RESULT:.*]] = pypto.cast %[[SELECTED]] : f32 to bf16
+  // PYPTO: pypto.write {{.*}}, %[[RESULT]] : {{.*}}, bf16
+
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %zero_i8 = arith.constant 0 : i8
+  %zero_bf16 = arith.constant 0.0 : bf16
+  %fill_f32 = arith.constant 2.0 : f32
+  scf.parallel (%block) = (%c0) to (%c1) step (%c1) {
+    %mask_value = npuvector.transfer_read %mask[%offset] [%c1] [%c1], %zero_i8 : memref<32xi8>, !npuvector<1xi8>
+    %input_value = npuvector.transfer_read %input[%offset] [%c1] [%c1], %zero_bf16 : memref<32xbf16>, !npuvector<1xbf16>
+    %wide = npuvector.extf %input_value : !npuvector<1xbf16> to !npuvector<1xf32>
+    %zero = npuvector.broadcast %zero_i8[%c1] [%c1] : i8 to !npuvector<1xi8>
+    %condition = npuvector.cmpi ne, %mask_value, %zero : !npuvector<1xi8> to !npuvector<1xi1>
+    %fill = npuvector.broadcast %fill_f32[%c1] [%c1] : f32 to !npuvector<1xf32>
+    %selected = npuvector.select %condition, %fill, %wide : !npuvector<1xi1>, !npuvector<1xf32>
+    %result = npuvector.truncf %selected : !npuvector<1xf32> to !npuvector<1xbf16>
+    npuvector.transfer_write %result, %output[%offset] : !npuvector<1xbf16>, memref<32xbf16>
+  }
+  return
+}
+
+// -----
+
+// Allocate aligned full and scratch tiles directly, without slicing them back to the logical shape.
+func.func @test_tile_allocation_padding(%input : !npuvector<512x2xf32>, %full_output : memref<512x8xf32>, %output : memref<512xf32>) {
+  // PYPTO-LABEL: func.func @test_tile_allocation_padding(
+  // PYPTO-NOT: pypto.slice
+  // PYPTO: %[[FULL:.*]] = pypto.tile_full "0.0"{{.*}} : !pypto.tile<f32, [512, 8]>
+  // PYPTO-NOT: pypto.slice
+  // PYPTO: %[[SCRATCH:.*]] = pypto.create_tile : <f32, [512, 8]>
+  // PYPTO-NOT: pypto.slice
+  // PYPTO: pypto.reduction {{ *}}sum, {{ *}}row, %arg0, %[[SCRATCH]] : !pypto.tile<f32, [512, 2]>, !pypto.tile<f32, [512, 8]> -> !pypto.tile<f32, [512]>
+  // PYPTO-NOT: pypto.slice
+  // PYPTO: return
+
+  %c0 = arith.constant 0 : index
+  %c2 = arith.constant 2 : index
+  %c512 = arith.constant 512 : index
+  %zero = arith.constant 0.0 : f32
+  %full = npuvector.broadcast %zero[%c512, %c2] [%c512, %c2] : f32 to !npuvector<512x2xf32>
+  npuvector.transfer_write %full, %full_output[%c0, %c0] : !npuvector<512x2xf32>, memref<512x8xf32>
+  %reduced = npuvector.reduction <add>, %input {reduction_dims = array<i64: 1>} : !npuvector<512x2xf32> into !npuvector<512xf32>
+  npuvector.transfer_write %reduced, %output[%c0] : !npuvector<512xf32>, memref<512xf32>
+  return
+}
