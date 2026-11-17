@@ -1090,3 +1090,49 @@ func.func @test_tile_allocation_padding(%input : !npuvector<512x2xf32>, %full_ou
   npuvector.transfer_write %reduced, %output[%c0] : !npuvector<512xf32>, memref<512xf32>
   return
 }
+
+// -----
+
+// A rank-0 private workspace inside an SPMD block nest is promoted to a
+// [1, 512] backing parameter: the single f32 element pads to the 64B row
+// stride (16 elements) and every block owns one row.
+func.func @test_spmd_rank0_workspace(%arg0 : memref<32xf32>, %arg1 : memref<32xf32>) {
+  // CHECK-LABEL: func.func @test_spmd_rank0_workspace(
+  // CHECK-SAME: %arg2: !emitpy.opaque<"pl.Tensor{{\[\[1, 512\], pl\.FP32\]}}">
+  // The promoted workspace stays InOut: it is both read and written.
+  // CHECK-SAME: attributes {emitpy.inout_args = array<i64: 2>, emitpy.out_args = array<i64: 1>, emitpy.pypto_kernel}
+  // Every access into the zero-rank buffer lands on the block's own row:
+  // the flat offset is the block id scaled by the padded row stride.
+  // CHECK: emitpy.spmd_scope (%[[BLK:.*]]) in (32) {
+  // CHECK: %[[OFF:.*]] = emitpy.call_opaque "muli"(%[[BLK]], %{{.*}}) : (index, index) -> index
+  // CHECK: emitpy.call_opaque "pl.write"(%arg2, {{.*}}%[[OFF]]) {{.*}}: (!emitpy.opaque<"pl.Tensor{{\[\[1, 512\], pl\.FP32\]}}">, f32, index, index) -> ()
+  // CHECK: %[[ACC:.*]] = emitpy.call_opaque "pl.read"(%arg2, {{.*}}%[[OFF]]) {{.*}}: (!emitpy.opaque<"pl.Tensor{{\[\[1, 512\], pl\.FP32\]}}">, index, index) -> f32
+  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "addf"({{.*}}%[[ACC]]) : (f32, f32) -> f32
+  // CHECK: emitpy.call_opaque "pl.write"(%arg2, {{.*}}%[[SUM]], {{.*}}%[[OFF]]) {{.*}}: (!emitpy.opaque<"pl.Tensor{{\[\[1, 512\], pl\.FP32\]}}">, f32, index, index) -> ()
+
+  // After the first stage the workspace is already a [1, 512] InOut memref
+  // parameter and the scalar accesses become indexed pypto reads/writes.
+  // PYPTO-LABEL: func.func @test_spmd_rank0_workspace(
+  // PYPTO-SAME: %arg2: memref<1x512xf32>
+  // PYPTO-SAME: attributes {emitpy.inout_args = array<i64: 2>, emitpy.out_args = array<i64: 1>, emitpy.pypto_kernel}
+  // PYPTO: pypto.spmd (%[[BLK:.*]]) in (32) {
+  // PYPTO: %[[OFF:.*]] = arith.muli %[[BLK]], %{{.*}} : index
+  // PYPTO: pypto.write %arg2[%{{.*}}, %[[OFF]]], %{{.*}} : memref<1x512xf32>, f32
+  // PYPTO: %[[ACC:.*]] = pypto.read %arg2[%{{.*}}, %[[OFF]]] : memref<1x512xf32> -> f32
+  // PYPTO: %[[SUM:.*]] = arith.addf %{{.*}}, %[[ACC]] : f32
+  // PYPTO: pypto.write %arg2[%{{.*}}, %[[OFF]]], %[[SUM]] : memref<1x512xf32>, f32
+
+  %cf0 = arith.constant 0.0 : f32
+  scf.forall (%blk) in (32) {
+    %alloc = memref.alloc() : memref<f32>
+    %zero = npuvector.broadcast %cf0 : f32 to !npuvector.f32
+    npuvector.transfer_write %zero, %alloc[] : !npuvector.f32, memref<f32>
+    %v = npuvector.transfer_read %arg0[%blk], %cf0 : memref<32xf32>, !npuvector.f32
+    %acc = npuvector.transfer_read %alloc[], %cf0 : memref<f32>, !npuvector.f32
+    %sum = arith.addf %v, %acc : !npuvector.f32
+    npuvector.transfer_write %sum, %alloc[] : !npuvector.f32, memref<f32>
+    %final = npuvector.transfer_read %alloc[], %cf0 : memref<f32>, !npuvector.f32
+    npuvector.transfer_write %final, %arg1[%blk] : !npuvector.f32, memref<32xf32>
+  } {mapping = [#hivm.block]}
+  return
+}
