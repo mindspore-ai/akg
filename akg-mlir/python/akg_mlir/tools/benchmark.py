@@ -128,7 +128,7 @@ def _prepare_pypto_arguments(kernel_name, parameters, buffers, device):
         else:
             tensor = torch.from_numpy(np.array(array, copy=True)).to(dtype=dtype)
         # AKG represents scalar tensors as [1]; use the compiled ABI shape.
-        tensor = tensor.reshape(tuple(parameter.shape)).to(device)
+        tensor = tensor.reshape(-1).to(device).view(tuple(parameter.shape))
         arguments.append(tensor)
     return arguments
 
