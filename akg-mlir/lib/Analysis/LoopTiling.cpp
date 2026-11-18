@@ -4383,10 +4383,21 @@ static LogicalResult wrapFunctionBodyWithFor(func::FuncOp func, OpBuilder &build
   }
 
   llvm::SmallVector<Operation *, kSmallVectorSizeSixteen> opsToMove;
-  for (auto it = entryBlock.begin(); it != Block::iterator(terminator); ++it) {
-    opsToMove.push_back(&*it);
+  llvm::SmallPtrSet<Operation *, 16> movedOps;
+  for (Operation &op : entryBlock.without_terminator()) {
+    // Keep view metadata outside only when its operands stay outside.
+    bool isMetadata = isa<arith::ConstantOp, memref::CollapseShapeOp, memref::ExpandShapeOp,
+                          memref::SubViewOp, memref::CastOp, memref::ReinterpretCastOp>(op);
+    bool dependsOnMovedOp = llvm::any_of(op.getOperands(), [&](Value operand) {
+      return movedOps.contains(operand.getDefiningOp());
+    });
+    if (isMetadata && !dependsOnMovedOp) {
+      continue;
+    }
+    opsToMove.push_back(&op);
+    movedOps.insert(&op);
   }
-  builder.setInsertionPointToStart(&entryBlock);
+  builder.setInsertionPoint(terminator);
 
   Value lb = builder.create<arith::ConstantIndexOp>(loc, 0);
   Value ub = builder.create<arith::ConstantIndexOp>(loc, 1);
