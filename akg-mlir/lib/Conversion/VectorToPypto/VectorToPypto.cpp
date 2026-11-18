@@ -1460,27 +1460,71 @@ static Type unpackedMaskType(Type maskType, MLIRContext *ctx) {
   return VectorType::get(cast<ShapedType>(maskType).getShape(), elem);
 }
 
+/// The runtime valid extents of `tile`'s logical region, spelled by its
+/// producer chain: a `pypto.load` materializes the region explicitly and a
+/// `pypto.reshape` re-stamps it, while casts, selects and the elementwise
+/// algebra relay it unchanged. Nullopt means no producer spells a partial
+/// region, i.e. the tile is valid across its whole allocation.
+static std::optional<SmallVector<Value>> tileValidExtents(Value tile, unsigned depth = 0) {
+  Operation *def = tile.getDefiningOp();
+  if (!def || depth > 16) {
+    return std::nullopt;
+  }
+  if (auto load = dyn_cast<pypto::LoadOp>(def)) {
+    ValueRange valid = load.getValidExtents();
+    if (valid.empty()) {
+      return std::nullopt;
+    }
+    return SmallVector<Value>(valid);
+  }
+  if (auto reshape = dyn_cast<pypto::ReshapeOp>(def)) {
+    ValueRange valid = reshape.getValidExtents();
+    if (!valid.empty()) {
+      return SmallVector<Value>(valid);
+    }
+    if (cast<ShapedType>(tile.getType()).getRank() == cast<ShapedType>(reshape.getSource().getType()).getRank()) {
+      return tileValidExtents(reshape.getSource(), depth + 1);
+    }
+    return std::nullopt;
+  }
+  if (auto select = dyn_cast<pypto::SelectOp>(def)) {
+    // Branches share their valid extents (the runtime select demands it),
+    // so one branch names the region for the whole select.
+    return tileValidExtents(select.getTrueValue(), depth + 1);
+  }
+  if (isa<pypto::AddOp, pypto::SubOp, pypto::MulOp, pypto::DivOp, pypto::FmodOp, pypto::MaximumOp, pypto::MinimumOp,
+          pypto::MaximumsOp, pypto::MinimumsOp, pypto::AndOp, pypto::OrOp, pypto::XorOp, pypto::ShlOp, pypto::ShrOp,
+          pypto::AbsOp, pypto::ExpOp, pypto::LogOp, pypto::SqrtOp, pypto::RsqrtOp, pypto::RecipOp, pypto::NegOp,
+          pypto::SinOp, pypto::CosOp, pypto::CastOp>(def)) {
+    for (Value operand : def->getOperands()) {
+      if (isa<pypto::TileType>(operand.getType())) {
+        return tileValidExtents(operand, depth + 1);
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 /// Construct each branch once at the mask's final physical allocation,
-/// retaining the original logical valid region independently. Narrow-cast
-/// row alignment is propagated to the producers before the mask is built;
-/// padding branches afterwards would disagree with the mask and select.
-static Value createMaskUnpackBranch(Location loc, Type type, ArrayRef<int64_t> allocation, ArrayRef<int64_t> validShape,
+/// retaining the original logical valid region independently. The valid
+/// extents arrive as values so a dynamic source type can name its region
+/// at runtime. Narrow-cast row alignment is propagated to the producers
+/// before the mask is built; padding branches afterwards would disagree
+/// with the mask and select.
+static Value createMaskUnpackBranch(Location loc, Type type, ArrayRef<int64_t> allocation, ArrayRef<Value> validExtents,
                                     StringRef value, ConversionPatternRewriter &rewriter) {
   SmallVector<Value> extents;
   bool explicitAllocation = allocation != cast<ShapedType>(type).getShape();
-  if (explicitAllocation || validShape != allocation) {
+  if (explicitAllocation || !validExtents.empty()) {
     std::transform(allocation.begin(), allocation.end(), std::back_inserter(extents),
                    [&](int64_t physical) { return rewriter.create<arith::ConstantIndexOp>(loc, physical); });
   }
   Value full = createAlignedTileFull(loc, type, rewriter.getStringAttr(value),
                                      explicitAllocation ? ValueRange(extents) : ValueRange{}, rewriter);
-  if (validShape == allocation) {
+  if (validExtents.empty()) {
     return full;
   }
-  SmallVector<Value> valid;
-  std::transform(validShape.begin(), validShape.end(), std::back_inserter(valid),
-                 [&](int64_t actual) { return rewriter.create<arith::ConstantIndexOp>(loc, actual); });
-  return rewriter.create<pypto::ReshapeOp>(loc, type, full, ValueRange(extents), ValueRange(valid));
+  return rewriter.create<pypto::ReshapeOp>(loc, type, full, ValueRange(extents), ValueRange(validExtents));
 }
 
 /// Finalizes a tile comparison rewrite: `mask` is the freshly built
@@ -1506,13 +1550,47 @@ static void replaceWithPackedMask(Operation *replaced, Value mask, ConversionPat
   }
   Location loc = replaced->getLoc();
   Type unpackType = unpackedMaskType(mask.getType(), rewriter.getContext());
+  SmallVector<int64_t> allocation = maskUnpackAllocation(replaced, mask);
+  // The branches re-view onto the mask's logical valid region so the select
+  // carries it: a static source type names the region directly, while a
+  // dynamic one carries no extents (its shape would spell the dynamic
+  // sentinel as a constant) and the region rides on the mask's producer
+  // chain instead, where a pypto.load bounds it explicitly at runtime.
+  SmallVector<Value> validExtents;
   ArrayRef<int64_t> validShape = shaped.getShape();
+  bool dynamicLogical = false;
   if (auto logical = dyn_cast<npuvector::NPUVectorType>(replaced->getResult(0).getType())) {
     validShape = logical.getShape();
+    dynamicLogical = !logical.hasStaticShape();
   }
-  SmallVector<int64_t> allocation = maskUnpackAllocation(replaced, mask);
-  Value ones = createMaskUnpackBranch(loc, unpackType, allocation, validShape, "1", rewriter);
-  Value zeros = createMaskUnpackBranch(loc, unpackType, allocation, validShape, "0", rewriter);
+  if (dynamicLogical) {
+    std::optional<SmallVector<Value>> region;
+    bool regionConsistent = true;
+    if (Operation *def = mask.getDefiningOp()) {
+      for (Value operand : def->getOperands()) {
+        if (!isa<pypto::TileType>(operand.getType())) {
+          continue;
+        }
+        auto next = tileValidExtents(operand);
+        if (!next) {
+          continue;  // a fully valid operand does not bound the region
+        }
+        if (region && *region != *next) {
+          regionConsistent = false;
+          break;
+        }
+        region = std::move(next);
+      }
+    }
+    if (regionConsistent && region) {
+      validExtents = std::move(*region);
+    }
+  } else if (validShape != ArrayRef<int64_t>(allocation)) {
+    std::transform(validShape.begin(), validShape.end(), std::back_inserter(validExtents),
+                   [&](int64_t actual) { return rewriter.create<arith::ConstantIndexOp>(loc, actual); });
+  }
+  Value ones = createMaskUnpackBranch(loc, unpackType, allocation, validExtents, "1", rewriter);
+  Value zeros = createMaskUnpackBranch(loc, unpackType, allocation, validExtents, "0", rewriter);
   Value unpacked = rewriter.create<pypto::SelectOp>(loc, unpackType, mask, ones, zeros);
   // Rebind elementwise consumers separately: the comparison's own
   // replacement remains the same-typed packed mask for selects/broadcasts.
