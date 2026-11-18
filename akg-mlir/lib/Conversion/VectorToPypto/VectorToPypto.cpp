@@ -26,8 +26,6 @@
 #include <sstream>
 #include <string>
 
-#include "akg/Dialect/Pypto/Passes.h"
-#include "mlir/Pass/PassManager.h"
 #include "akg/Dialect/EmitPy/IR/EmitPy.h"
 #include "akg/Dialect/EmitPy/IR/EmitPyOps.h"
 #include "akg/Dialect/EmitPy/IR/EmitPyTypes.h"
@@ -7015,9 +7013,6 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
     // cannot capture tile values; scalar constants would cross as runtime
     // Vars, losing the compile-time constant property.
     sinkConstantsIntoSpmd(funcOp);
-    OpPassManager alignment(func::FuncOp::getOperationName());
-    alignment.addPass(createPyptoAlignShapePass());
-    if (failed(runPipeline(alignment, funcOp))) signalPassFailure();
   }
 };
 

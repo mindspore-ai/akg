@@ -19,6 +19,7 @@
 #include <cstdlib>
 
 #include <nlohmann/json.hpp>
+#include "akg/Dialect/Pypto/Passes.h"
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Affine/Passes.h"
 #include "akg/Dialect/Linalg/Passes.h"
@@ -185,6 +186,28 @@ void createHIVMPipeline(OpPassManager &pm, const AscendOptPipelineOptions &optio
   pm.addPass(createConvertHIVMToStandardPass());
 }
 
+void createPyptoPipeline(OpPassManager &pm) {
+  // The EmitPy backend consumes the vectorized (npuvector) IR directly
+  // and stops after the pypto kernel IR conversion: the executable
+  // Python is produced downstream by 'akg-translate --mlir-to-pypto',
+  // replacing the HIVM/bishengir lowering entirely (register-tile
+  // splitting, device specs and binary codegen all belong to that
+  // path).
+  // Expand the remaining affine.apply/min/max (loop bounds and dynamic
+  // vector sizes) into arith first: the conversion below has no
+  // legalization for affine ops.
+  pm.addPass(createLowerAffinePass());
+  // Two stages: tile-level ops first become typed pypto ops, then the
+  // pypto layer is lowered to the emitpy call_opaque forms. Keeping the
+  // stages as separate passes makes the intermediate pypto IR visible
+  // in the pass dumps.
+  pm.nest<func::FuncOp>().addPass(createVectorToPyptoConversionPass());
+  pm.nest<func::FuncOp>().addPass(createPyptoAlignShapePass());
+  pm.nest<func::FuncOp>().addPass(createPyptoToEmitPyConversionPass());
+  // Drop module-level constant buffers left dead by the conversion.
+  pm.addPass(createSymbolDCEPass());
+}
+
 void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptions &options) {
   pm.addPass(createAKGOperatorIdentifyPass());
   pm.addPass(createHoistTensorSlicePass());
@@ -261,12 +284,11 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     // legacy i32/i64 cmpi guard in the type legalization must stand down
     // when emitpypto is on.
     fusionPM.addPass(
-        createLegalizeTypeForAscendPass(options.optLevel >= kLegalizeTypeOptLevel, options.enableEmitPypto));
+      createLegalizeTypeForAscendPass(options.optLevel >= kLegalizeTypeOptLevel, options.enableEmitPypto));
     // The pypto backend keeps math.rsqrt (first-class pypto.rsqrt); the
     // 1/sqrt expansion only serves the HIVM lowering.
     fusionPM.addPass(createNormalizePass(!options.enableEmitPypto));
     fusionPM.addPass(createConvertAffineToSCFPass());
-
 
     pm.addPass(createAddOutParameterPass());
     pm.addPass(createCanonicalizerPass());
@@ -286,24 +308,7 @@ void createAscendOptPipelineImpl(OpPassManager &pm, const AscendOptPipelineOptio
     pm.addPass(npuvector::createEliminateNPUVectorRedundantOpsPass());
     pm.addPass(createCSEPass());
     if (options.enableEmitPypto) {
-      // The EmitPy backend consumes the vectorized (npuvector) IR directly
-      // and stops after the pypto kernel IR conversion: the executable
-      // Python is produced downstream by 'akg-translate --mlir-to-pypto',
-      // replacing the HIVM/bishengir lowering entirely (register-tile
-      // splitting, device specs and binary codegen all belong to that
-      // path).
-      // Expand the remaining affine.apply/min/max (loop bounds and dynamic
-      // vector sizes) into arith first: the conversion below has no
-      // legalization for affine ops.
-      pm.addPass(createLowerAffinePass());
-      // Two stages: tile-level ops first become typed pypto ops, then the
-      // pypto layer is lowered to the emitpy call_opaque forms. Keeping the
-      // stages as separate passes makes the intermediate pypto IR visible
-      // in the pass dumps.
-      pm.nest<func::FuncOp>().addPass(createVectorToPyptoConversionPass());
-      pm.nest<func::FuncOp>().addPass(createPyptoToEmitPyConversionPass());
-      // Drop module-level constant buffers left dead by the conversion.
-      pm.addPass(createSymbolDCEPass());
+      createPyptoPipeline(pm);
       return;
     }
     if (akg::NpuInfo::getInstance(options.arch).isRegBasedArch()) {
