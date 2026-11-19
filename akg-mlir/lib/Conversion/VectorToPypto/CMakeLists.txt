@@ -10,7 +10,6 @@ add_mlir_conversion_library(AKGVectorToEmitPy
   DISABLE_INSTALL
 
   LINK_LIBS PUBLIC
-  AKGPyptoPasses
   MLIRIR
   MLIRArithDialect
   MLIRFuncDialect

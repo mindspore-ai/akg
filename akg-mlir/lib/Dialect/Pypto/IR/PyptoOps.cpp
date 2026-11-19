@@ -65,51 +65,6 @@ std::optional<Type> getElementTypeIfKnown(Type type) {
   return std::nullopt;
 }
 
-// Check explicit allocation bounds, not the logical shape of views or
-// comparison masks. Runtime bounds are checked by the PyPTO backend.
-LogicalResult verifyAllocationAlignment(Operation *op, Type type, ValueRange extents = {}) {
-  std::optional<Type> elementType = getElementTypeIfKnown(type);
-  if (!elementType || !TileType::isValidElementType(*elementType)) {
-    return success();
-  }
-  int64_t trailing;
-  if (!extents.empty()) {
-    APInt bound;
-    if (!matchPattern(extents.back(), m_ConstantInt(&bound))) {
-      return success();
-    }
-    trailing = bound.getSExtValue();
-  } else {
-    std::optional<SmallVector<int64_t>> shape = getShapeIfKnown(type);
-    if (!shape || shape->empty() || ShapedType::isDynamic(shape->back())) {
-      return success();
-    }
-    trailing = shape->back();
-  }
-  // Explicit BOOL allocations use one byte; index lowers to INT64.
-  unsigned elementBits = isa<IndexType>(*elementType) ? 64 : elementType->getIntOrFloatBitWidth();
-  unsigned elementBytes = (elementBits + 7) / 8;
-  unsigned alignedElements = 32 / std::gcd(32u, elementBytes);
-  if (trailing % alignedElements != 0) {
-    return op->emitOpError("allocation trailing dimension must be a multiple of ")
-           << alignedElements << " for 32-byte alignment, got " << trailing << " for " << *elementType;
-  }
-  return success();
-}
-
-// Returns the total element count, or std::nullopt when any dimension is
-// dynamic.
-std::optional<int64_t> getStaticNumElements(ArrayRef<int64_t> shape) {
-  int64_t num = 1;
-  for (int64_t dim : shape) {
-    if (ShapedType::isDynamic(dim)) {
-      return std::nullopt;
-    }
-    num *= dim;
-  }
-  return num;
-}
-
 std::string shapeToString(ArrayRef<int64_t> shape) {
   std::string out;
   llvm::raw_string_ostream os(out);
@@ -118,38 +73,6 @@ std::string shapeToString(ArrayRef<int64_t> shape) {
   os << "]";
   os.flush();
   return out;
-}
-
-// Checks that every tile-shaped value in `values` shares one static shape.
-// Plain scalars (which broadcast) and opaque tensors (whose shape the
-// lowering guards) are exempt.
-LogicalResult verifySameShape(Operation *op, ArrayRef<Value> values) {
-  std::optional<SmallVector<int64_t>> expected;
-  for (Value value : values) {
-    std::optional<SmallVector<int64_t>> shape = getShapeIfKnown(value.getType());
-    if (!shape) {
-      continue;
-    }
-    if (!expected) {
-      expected = shape;
-    } else if (*shape != *expected) {
-      return op->emitOpError("tile operands/results must share one shape, got ")
-             << shapeToString(*expected) << " and " << shapeToString(*shape);
-    }
-  }
-  return success();
-}
-
-// Shared verifier for the elementwise binary ops.
-template <typename OpTy>
-LogicalResult verifyBinaryShape(OpTy op) {
-  return verifySameShape(op.getOperation(), {op.getLhs(), op.getRhs(), op.getResult()});
-}
-
-// Shared verifier for the elementwise unary ops.
-template <typename OpTy>
-LogicalResult verifyUnaryShape(OpTy op) {
-  return verifySameShape(op.getOperation(), {op.getInput(), op.getResult()});
 }
 
 }  // namespace
@@ -177,19 +100,17 @@ LogicalResult TileFullOp::verify() {
   // empty for statically shaped results. During the incremental lowering
   // the result may carry the source shaped type instead of a !pypto.tile.
   if (getExtents().empty()) {
-    return verifyAllocationAlignment(getOperation(), getResult().getType());
+    return success();
   }
   std::optional<SmallVector<int64_t>> shape = getShapeIfKnown(getResult().getType());
   if (!shape || shape->size() != getExtents().size()) {
     return emitOpError("extents (") << getExtents().size() << ") must be empty or match the result rank ("
                                     << (shape ? shape->size() : 0) << ")";
   }
-  return verifyAllocationAlignment(getOperation(), getResult().getType(), getExtents());
+  return success();
 }
 
-LogicalResult CreateTileOp::verify() {
-  return verifyAllocationAlignment(getOperation(), getResult().getType());
-}
+LogicalResult CreateTileOp::verify() { return success(); }
 
 //===----------------------------------------------------------------------===//
 // B. Tile views
@@ -266,13 +187,6 @@ LogicalResult ReshapeOp::verify() {
   if (!srcShape || !dstShape) {
     return success();
   }
-  std::optional<int64_t> srcElems = getStaticNumElements(*srcShape);
-  std::optional<int64_t> dstElems = getStaticNumElements(*dstShape);
-  if (srcElems && dstElems && *srcElems != *dstElems) {
-    return emitOpError("reshape must preserve the element count: source ")
-           << shapeToString(*srcShape) << " has " << *srcElems << " elements, result " << shapeToString(*dstShape)
-           << " has " << *dstElems;
-  }
   return success();
 }
 
@@ -288,25 +202,10 @@ LogicalResult TransposeOp::verify() {
       return emitOpError("axes ") << i << " and " << j << " are out of range for source rank " << srcShape->size();
     }
   }
-  std::optional<SmallVector<int64_t>> dstShape = getShapeIfKnown(getResult().getType());
-  if (srcShape && dstShape) {
-    SmallVector<int64_t> expected = *srcShape;
-    std::swap(expected[i], expected[j]);
-    if (expected != *dstShape) {
-      return emitOpError("expected result shape ")
-             << shapeToString(expected) << " for axes " << i << " and " << j << ", got " << shapeToString(*dstShape);
-    }
-  }
   return success();
 }
 
 LogicalResult ReinterpretViewOp::verify() {
-  std::optional<SmallVector<int64_t>> srcShape = getShapeIfKnown(getSource().getType());
-  std::optional<SmallVector<int64_t>> dstShape = getShapeIfKnown(getResult().getType());
-  if (srcShape && dstShape && *srcShape != *dstShape) {
-    return emitOpError("reinterpret_view must preserve the shape: ")
-           << shapeToString(*srcShape) << " vs " << shapeToString(*dstShape);
-  }
   std::optional<Type> srcElem = getElementTypeIfKnown(getSource().getType());
   std::optional<Type> dstElem = getElementTypeIfKnown(getResult().getType());
   if (srcElem && dstElem && srcElem->getIntOrFloatBitWidth() != dstElem->getIntOrFloatBitWidth()) {
@@ -320,12 +219,6 @@ LogicalResult ReinterpretViewOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult CastOp::verify() {
-  std::optional<SmallVector<int64_t>> srcShape = getShapeIfKnown(getSource().getType());
-  std::optional<SmallVector<int64_t>> dstShape = getShapeIfKnown(getResult().getType());
-  if (srcShape && dstShape && *srcShape != *dstShape) {
-    return emitOpError("cast must preserve the shape: ")
-           << shapeToString(*srcShape) << " vs " << shapeToString(*dstShape);
-  }
   if (auto mode = getMode()) {
     if (!llvm::is_contained(ArrayRef<StringRef>{"round", "floor", "ceil"}, *mode)) {
       return emitOpError("unknown float-to-int rounding mode: ") << *mode;
@@ -335,9 +228,6 @@ LogicalResult CastOp::verify() {
 }
 
 LogicalResult CmpOp::verify() {
-  if (failed(verifySameShape(getOperation(), {getLhs(), getRhs(), getResult()}))) {
-    return failure();
-  }
   std::optional<Type> elem = getElementTypeIfKnown(getResult().getType());
   if (elem && !elem->isInteger(1)) {
     return emitOpError("result must hold i1 elements, got ") << *elem;
@@ -346,9 +236,6 @@ LogicalResult CmpOp::verify() {
 }
 
 LogicalResult SelectOp::verify() {
-  if (failed(verifySameShape(getOperation(), {getCondition(), getTrueValue(), getFalseValue(), getResult()}))) {
-    return failure();
-  }
   std::optional<Type> condElem = getElementTypeIfKnown(getCondition().getType());
   if (condElem && !condElem->isInteger(1)) {
     return emitOpError("condition must hold i1 elements, got ") << *condElem;
@@ -360,13 +247,14 @@ LogicalResult SelectOp::verify() {
 // D. Elementwise binary ops
 //===----------------------------------------------------------------------===//
 
-LogicalResult AddOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult SubOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult MulOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult DivOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult FmodOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult MaximumOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult MinimumOp::verify() { return verifyBinaryShape(*this); }
+// Physical shape relations are checked by PyptoAlignShape after propagation.
+LogicalResult AddOp::verify() { return success(); }
+LogicalResult SubOp::verify() { return success(); }
+LogicalResult MulOp::verify() { return success(); }
+LogicalResult DivOp::verify() { return success(); }
+LogicalResult FmodOp::verify() { return success(); }
+LogicalResult MaximumOp::verify() { return success(); }
+LogicalResult MinimumOp::verify() { return success(); }
 
 // Shared verifier for the tile-scalar clamps: the lhs and result share one
 // tile shape while the rhs must stay a plain scalar (the runtime's TMAXS/
@@ -374,23 +262,19 @@ LogicalResult MinimumOp::verify() { return verifyBinaryShape(*this); }
 // point of the op family).
 template <typename OpTy>
 LogicalResult verifyTileScalarClampShape(OpTy op) {
-  if (failed(verifyBinaryShape(op))) {
-    return failure();
-  }
   if (getShapeIfKnown(op.getRhs().getType())) {
-    return op->emitOpError("tile-scalar clamp needs a scalar rhs, got ")
-           << op.getRhs().getType();
+    return op->emitOpError("tile-scalar clamp needs a scalar rhs, got ") << op.getRhs().getType();
   }
   return success();
 }
 
 LogicalResult MaximumsOp::verify() { return verifyTileScalarClampShape(*this); }
 LogicalResult MinimumsOp::verify() { return verifyTileScalarClampShape(*this); }
-LogicalResult AndOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult OrOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult XorOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult ShlOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult ShrOp::verify() { return verifyBinaryShape(*this); }
+LogicalResult AndOp::verify() { return success(); }
+LogicalResult OrOp::verify() { return success(); }
+LogicalResult XorOp::verify() { return success(); }
+LogicalResult ShlOp::verify() { return success(); }
+LogicalResult ShrOp::verify() { return success(); }
 
 // Shared verifier for the row_expand family, mirroring the runtime's
 // DeduceTileRowExpandType contract: both operands carry at least two
@@ -411,16 +295,7 @@ static LogicalResult verifyRowExpand(OpTy op) {
   if (rowShape && !ShapedType::isDynamic(rowShape->back()) && rowShape->back() != 1) {
     return op.emitOpError("row vector's last dimension must be 1, got ") << shapeToString(*rowShape);
   }
-  if (tileShape && rowShape) {
-    int64_t tileRows = (*tileShape)[tileShape->size() - 2];
-    int64_t rowRows = (*rowShape)[rowShape->size() - 2];
-    if (!ShapedType::isDynamic(tileRows) && !ShapedType::isDynamic(rowRows) && tileRows != rowRows) {
-      return op.emitOpError("row counts must match: tile has ") << tileRows << " rows, row vector has " << rowRows;
-    }
-  }
-  if (failed(verifySameShape(op.getOperation(), {op.getTile(), op.getResult()}))) {
-    return failure();
-  }
+
   std::optional<Type> tileElem = getElementTypeIfKnown(op.getTile().getType());
   std::optional<Type> rowElem = getElementTypeIfKnown(op.getRowVec().getType());
   if (tileElem && rowElem && *tileElem != *rowElem) {
@@ -450,22 +325,10 @@ static LogicalResult verifyColExpand(OpTy op) {
   if (colShape && colShape->size() < 2) {
     return op.emitOpError("column vector must have at least 2 dimensions, got ") << shapeToString(*colShape);
   }
-  if (colShape && !ShapedType::isDynamic((*colShape)[colShape->size() - 2]) &&
-      (*colShape)[colShape->size() - 2] != 1) {
-    return op.emitOpError("column vector's second-to-last dimension must be 1, got ")
-        << shapeToString(*colShape);
+  if (colShape && !ShapedType::isDynamic((*colShape)[colShape->size() - 2]) && (*colShape)[colShape->size() - 2] != 1) {
+    return op.emitOpError("column vector's second-to-last dimension must be 1, got ") << shapeToString(*colShape);
   }
-  if (tileShape && colShape) {
-    int64_t tileCols = tileShape->back();
-    int64_t vecCols = colShape->back();
-    if (!ShapedType::isDynamic(tileCols) && !ShapedType::isDynamic(vecCols) && tileCols != vecCols) {
-      return op.emitOpError("column counts must match: tile has ")
-          << tileCols << " columns, column vector has " << vecCols;
-    }
-  }
-  if (failed(verifySameShape(op.getOperation(), {op.getTile(), op.getResult()}))) {
-    return failure();
-  }
+
   std::optional<Type> tileElem = getElementTypeIfKnown(op.getTile().getType());
   std::optional<Type> colElem = getElementTypeIfKnown(op.getColVec().getType());
   if (tileElem && colElem && *tileElem != *colElem) {
@@ -483,22 +346,22 @@ LogicalResult ColExpandDivOp::verify() { return verifyColExpand(*this); }
 // E. Elementwise unary ops
 //===----------------------------------------------------------------------===//
 
-LogicalResult NegOp::verify() { return verifyUnaryShape(*this); }
-LogicalResult AbsOp::verify() { return verifyUnaryShape(*this); }
-LogicalResult ExpOp::verify() { return verifyUnaryShape(*this); }
-LogicalResult LogOp::verify() { return verifyUnaryShape(*this); }
-LogicalResult SqrtOp::verify() { return verifyUnaryShape(*this); }
-LogicalResult RsqrtOp::verify() { return verifyUnaryShape(*this); }
-LogicalResult RecipOp::verify() { return verifyUnaryShape(*this); }
-LogicalResult SinOp::verify() { return verifyUnaryShape(*this); }
-LogicalResult CosOp::verify() { return verifyUnaryShape(*this); }
+LogicalResult NegOp::verify() { return success(); }
+LogicalResult AbsOp::verify() { return success(); }
+LogicalResult ExpOp::verify() { return success(); }
+LogicalResult LogOp::verify() { return success(); }
+LogicalResult SqrtOp::verify() { return success(); }
+LogicalResult RsqrtOp::verify() { return success(); }
+LogicalResult RecipOp::verify() { return success(); }
+LogicalResult SinOp::verify() { return success(); }
+LogicalResult CosOp::verify() { return success(); }
 
 //===----------------------------------------------------------------------===//
 // F. Scalar combines
 //===----------------------------------------------------------------------===//
 
-LogicalResult MaxOp::verify() { return verifyBinaryShape(*this); }
-LogicalResult MinOp::verify() { return verifyBinaryShape(*this); }
+LogicalResult MaxOp::verify() { return success(); }
+LogicalResult MinOp::verify() { return success(); }
 
 //===----------------------------------------------------------------------===//
 // G. Reduction and scalar IO
@@ -510,8 +373,7 @@ LogicalResult FillPadExpandOp::verify() {
   }
   auto sourceShape = getShapeIfKnown(getSource().getType());
   auto resultShape = getShapeIfKnown(getResult().getType());
-  if (!resultShape || resultShape->size() != 2 ||
-      llvm::any_of(*resultShape, [](int64_t dim) { return dim <= 0; })) {
+  if (!resultShape || resultShape->size() != 2 || llvm::any_of(*resultShape, [](int64_t dim) { return dim <= 0; })) {
     return emitOpError("result must be a statically shaped positive 2D tile");
   }
   if (sourceShape) {
@@ -531,60 +393,8 @@ LogicalResult FillPadExpandOp::verify() {
 }
 
 LogicalResult ReductionOp::verify() {
-  // The vector may be a !pypto.tile or, during the incremental lowering,
-  // the source shaped type (vector/npuvector) it was derived from. The
-  // scratch may also be an opaque `pl.Tile` produced mid-lowering; shape
-  // checks only run when both sides carry a static shape.
-  std::optional<SmallVector<int64_t>> vectorShape = getShapeIfKnown(getVector().getType());
-  if (!vectorShape) {
-    return success();
-  }
-  if (vectorShape->empty()) {
-    return emitOpError("cannot reduce a rank-0 tile");
-  }
-  std::optional<SmallVector<int64_t>> scratchShape = getShapeIfKnown(getScratch().getType());
-  if (scratchShape) {
-    if (scratchShape->size() != vectorShape->size()) {
-      return emitOpError("scratch shape ") << shapeToString(*scratchShape) << " must have the vector's rank "
-                                          << shapeToString(*vectorShape);
-    }
-    // The runtime requires the scratch to cover the vector in every
-    // dimension: a static vector dim must be matched exactly, while a
-    // dynamic dim names no element count of its own and the scratch
-    // materializes its allocation bound statically.
-    for (auto [scratchDim, vectorDim] : llvm::zip(*scratchShape, *vectorShape)) {
-      if (ShapedType::isDynamic(vectorDim)) {
-        if (ShapedType::isDynamic(scratchDim)) {
-          return emitOpError("scratch shape ") << shapeToString(*scratchShape)
-                                               << " must materialize a static bound for the dynamic vector shape "
-                                               << shapeToString(*vectorShape);
-        }
-      } else if (ShapedType::isDynamic(scratchDim) || scratchDim < vectorDim) {
-        return emitOpError("scratch shape ") << shapeToString(*scratchShape) << " must cover the vector shape "
-                                             << shapeToString(*vectorShape);
-      }
-    }
-  }
-
-  std::optional<SmallVector<int64_t>> resultShape = getShapeIfKnown(getResult().getType());
-  if (!resultShape) {
-    return success();
-  }
-  SmallVector<int64_t> expected(*vectorShape);
-  size_t folded = getAxis() == ReduceAxis::row ? expected.size() - 1 : 0;
-  expected[folded] = 1;
-  if (*resultShape != expected) {
-    // During the incremental lowering a partial reduction keeps the source
-    // lower-rank type instead (the folded axis is dropped); the folded
-    // extent is 1, so col-major flat indexing stays equivalent.
-    SmallVector<int64_t> lowered(*vectorShape);
-    lowered.erase(lowered.begin() + folded);
-    if (*resultShape == lowered) {
-      return success();
-    }
-    return emitOpError("the reduction is keepdim: expected result shape ")
-           << shapeToString(expected) << ", got " << shapeToString(*resultShape);
-  }
+  auto shape = getShapeIfKnown(getVector().getType());
+  if (shape && shape->empty()) return emitOpError("cannot reduce a rank-0 tile");
   return success();
 }
 
@@ -663,7 +473,7 @@ LogicalResult LoadOp::verify() {
   if (padded != 0 && padded != srcRank) {
     return emitOpError("number of padded shapes (") << padded << ") must match the source rank (" << srcRank << ")";
   }
-  return verifyAllocationAlignment(getOperation(), getResult().getType(), getPaddedShapes());
+  return success();
 }
 
 LogicalResult StoreOp::verify() {

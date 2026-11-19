@@ -1,4 +1,5 @@
 set(AKG_MLIR_LIBS
+  AKGPyptoPasses
   AKGTransformsPasses
   AKGLinalgPasses
   AKGTensorPasses
