@@ -1013,8 +1013,16 @@ class CreateTileOpPattern : public OpConversionPattern<pypto::CreateTileOp> {
                                 rewriter.getAttr<emitpy::OpaqueAttr>("pl.MemorySpace.Vec")};
     SmallVector<Attribute> keywords{rewriter.getStringAttr(""), rewriter.getStringAttr("dtype"),
                                     rewriter.getStringAttr("target_memory")};
-    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.create_tile", ValueRange{},
-                                                      rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    auto allocation =
+      rewriter.create<emitpy::CallOpaqueOp>(op.getLoc(), resultType, "pl.create_tile", ValueRange{},
+                                            rewriter.getArrayAttr(args), rewriter.getArrayAttr(keywords));
+    ValueRange valid = adaptor.getValidExtents();
+    if (valid.empty()) {
+      rewriter.replaceOp(op, allocation.getResult(0));
+      return success();
+    }
+    rewriter.replaceOpWithNewOp<emitpy::CallOpaqueOp>(op, resultType, "pl.set_validshape",
+                                                      ValueRange{allocation.getResult(0), valid[0], valid[1]});
     return success();
   }
 };
@@ -1424,6 +1432,16 @@ class CmpOpPattern : public OpConversionPattern<pypto::CmpOp> {
 // Reduction and scalar IO
 //===----------------------------------------------------------------------===//
 
+// A row-sum scratch tile can be larger than the data tile.
+static Type getReductionAllocationType(pypto::ReductionOp op) {
+  auto input = dyn_cast<pypto::TileType>(op.getVector().getType());
+  if (op.getKind() == pypto::ReduceKind::sum && op.getAxis() == pypto::ReduceAxis::row && input &&
+      input.getRank() == 2 && input.hasStaticShape()) {
+    return input;
+  }
+  return op.getScratch().getType();
+}
+
 /// Rewrites `pypto.reduction` into `pl.row_<kind>(vector, scratch)` /
 /// `pl.col_<kind>(vector, scratch)`: a keepdim in-place fold of the last
 /// (row) or first (col) axis, working in the scratch tile. The keepdim raw
@@ -1449,14 +1467,11 @@ class ReductionOpPattern : public OpConversionPattern<pypto::ReductionOp> {
     }
     std::string callee = "pl." + prefix.str() + suffix.str();
 
-    // The scratch tile keeps the input's statically allocated extents, so
-    // dropping the folded axis from it spells the collapsed result shape.
     SmallVector<int64_t> collapsed;
     if (auto shapedResult = dyn_cast<ShapedType>(op.getResult().getType())) {
-      auto scratch = dyn_cast<pypto::TileType>(op.getScratch().getType());
-      if (scratch && !llvm::any_of(scratch.getShape(), ShapedType::isDynamic) &&
-          shapedResult.getRank() + 1 == scratch.getRank()) {
-        collapsed = llvm::to_vector(scratch.getShape());
+      auto allocation = dyn_cast<pypto::TileType>(getReductionAllocationType(op));
+      if (allocation && allocation.hasStaticShape() && shapedResult.getRank() + 1 == allocation.getRank()) {
+        collapsed = llvm::to_vector(allocation.getShape());
         collapsed.erase(collapsed.begin() + (op.getAxis() == pypto::ReduceAxis::row ? collapsed.size() - 1 : 0));
       }
     }

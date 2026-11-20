@@ -110,7 +110,12 @@ LogicalResult TileFullOp::verify() {
   return success();
 }
 
-LogicalResult CreateTileOp::verify() { return success(); }
+LogicalResult CreateTileOp::verify() {
+  if (!getValidExtents().empty() && (getResult().getType().getRank() != 2 || getValidExtents().size() != 2)) {
+    return emitOpError("valid extents require a 2D tile and two index operands");
+  }
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // B. Tile views
