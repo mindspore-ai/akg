@@ -131,13 +131,12 @@ def Pypto_CreateTileOp : Pypto_Op<"create_tile"> {
     %t = pypto.create_tile : !pypto.tile<f32, [8, 8]>
     ```
 
-    The shape and dtype are taken from the result type.
-
-    The emitpy lowering emits
-    `pl.create_tile(shape, dtype=..., target_memory=pl.MemorySpace.Vec)`.
+    The physical shape and dtype are taken from the result type. Optional
+    valid extents describe the live region of a 2D scratch tile.
   }];
+  let arguments = (ins Variadic<Index>:$validExtents);
   let results = (outs Pypto_TileType:$result);
-  let assemblyFormat = "attr-dict `:` type($result)";
+  let assemblyFormat = "(`valid` `[` $validExtents^ `]`)? attr-dict `:` type($result)";
   let hasVerifier = 1;
 }
 

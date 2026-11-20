@@ -305,8 +305,8 @@ static Value createTmpTile(ConversionPatternRewriter &rewriter, Location loc, Ar
   if (!allocation.empty()) {
     allocation.back() = alignExtentTo32B(allocation.back(), (elemBits + 7) / 8);
   }
-  return rewriter.create<pypto::CreateTileOp>(loc, pypto::TileType::get(rewriter.getContext(), elemType, allocation))
-    .getResult();
+  auto type = pypto::TileType::get(rewriter.getContext(), elemType, allocation);
+  return rewriter.create<pypto::CreateTileOp>(loc, type, ValueRange{}).getResult();
 }
 
 // Share backward shape results within an allocation query, including the
@@ -5916,7 +5916,7 @@ class LocalTilePattern : public OpConversionPattern<pypto::LocalTileOp> {
     // FP32. Reserve 64-byte rows for the local accumulator as well.
     int64_t alignment = 64 / (type.getElementType().getIntOrFloatBitWidth() / 8);
     shape.back() = llvm::divideCeil(shape.back(), alignment) * alignment;
-    rewriter.replaceOpWithNewOp<pypto::CreateTileOp>(op, pyptoType(op.getResult().getType(), shape));
+    rewriter.replaceOpWithNewOp<pypto::CreateTileOp>(op, pyptoType(op.getResult().getType(), shape), ValueRange{});
     return success();
   }
 };
