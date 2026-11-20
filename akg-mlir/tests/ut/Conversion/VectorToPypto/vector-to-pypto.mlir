@@ -100,7 +100,7 @@ func.func @test_elementwise(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>
 
 // -----
 
-func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 {
+func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32, %out : memref<f32>) {
   // CHECK-LABEL: func.func @test_npuvector_ops(
   // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP32
   // CHECK-SAME: %arg1: !emitpy.opaque<"pl.Scalar{{[^"]*}}pl.FP32
@@ -113,17 +113,15 @@ func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 
   // A broadcast scalar feeding the arith mul fuses onto its native
   // tile-first scalar operand: no carrier tile is materialized.
   // CHECK: %[[M:.*]] = emitpy.call_opaque "pl.mul"(%[[T]], %arg1)
-  // A full reduction row-reduces on device, then reads out and combines the
-  // surviving rows with scalar-form adds.
+  // Reduce both axes on device and store the resulting tile.
   // CHECK: %[[ROW_TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
-  // CHECK: %[[ROW:.*]] = emitpy.call_opaque "pl.row_sum"(%[[M]], %[[ROW_TMP]])
-  // CHECK: %[[R0:.*]] = emitpy.call_opaque "pl.read"(%[[ROW]])
-  // CHECK: %[[R1:.*]] = emitpy.call_opaque "pl.read"(%[[ROW]])
-  // The surviving rows combine as scalar arith, mapped onto the infix
-  // addf pseudo-callee.
-  // CHECK: emitpy.call_opaque "addf"(%[[R0]], %[[R1]])
-  // The scalar result is written straight into the [1] output tensor.
-  // CHECK: emitpy.call_opaque "pl.write"(%arg2, {{.*}})
+  // CHECK: %[[ROWS:.*]] = emitpy.call_opaque "pl.row_sum"(%[[M]], %[[ROW_TMP]])
+  // CHECK: %[[ROW:.*]] = emitpy.call_opaque "pl.reshape"(%[[ROWS]]) {{.*}}[1, 16]
+  // CHECK: %[[TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
+  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.row_sum"(%[[ROW]], %[[TMP]])
+  // CHECK-NOT: "pl.read"
+  // CHECK-NOT: "pl.write"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[SUM]], %{{.*}})
 
   // The transpose view, the fused scalar operands, the elementwise ops, the
   // scratch tile and the reduction chain all sit in the pypto layer after
@@ -131,22 +129,27 @@ func.func @test_npuvector_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 
   // PYPTO-LABEL: func.func @test_npuvector_ops(
   // PYPTO: %[[T:.*]] = pypto.transpose %arg0, 0, 1 : !pypto.tile<f32, [8, 16]> to !pypto.tile<f32, [16, 8]>
   // PYPTO: %[[M:.*]] = pypto.mul %[[T]], %arg1 : !pypto.tile<f32, [16, 8]>, f32 to !pypto.tile<f32, [16, 8]>
-  // The full row reduction works in the scratch tile and yields a scalar.
   // PYPTO: %[[ROW_TMP:.*]] = pypto.create_tile : <f32, [16, 8]>
-  // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, %[[M]], %[[ROW_TMP]] : !pypto.tile<f32, [16, 8]>, {{.*}} -> f32
-  // The surviving rows are read out and combined with scalar arith; the
-  // coordinates are arith constants named after their values.
-  // PYPTO: %[[R0:.*]] = pypto.read %[[ROW]][%c0, %c0_0] : f32 -> f32
-  // PYPTO: %[[R1:.*]] = pypto.read %[[ROW]][%c1, %c0_1] : f32 -> f32
-  // PYPTO: arith.addf %[[R0]], %[[R1]] : f32
-  // The scalar result goes straight into the [1] output tensor.
-  // PYPTO: pypto.write %arg2[{{.*}}], {{.*}} : memref<1xf32>, f32
+  // PYPTO: %[[ROWS:.*]] = pypto.reduction sum, row, %[[M]], %[[ROW_TMP]] : {{.*}} -> !pypto.tile<f32, [16, 1]>
+  // PYPTO: %[[ROW:.*]] = pypto.reshape %[[ROWS]] : !pypto.tile<f32, [16, 1]> to !pypto.tile<f32, [1, 16]>
+  // PYPTO: %[[TMP:.*]] = pypto.create_tile : <f32, [1, 16]>
+  // PYPTO: %[[SUM:.*]] = pypto.reduction sum, row, %[[ROW]], %[[TMP]] : {{.*}} -> !pypto.tile<f32, [1, 1]>
+  // PYPTO-NOT: pypto.read
+  // PYPTO-NOT: pypto.write
+  // PYPTO: %[[OUT_VIEW:.*]] = pypto.reshape %arg2 : memref<f32> to memref<1xf32>
+  // PYPTO-NEXT: %[[OUT:.*]] = pypto.reshape %[[OUT_VIEW]] : memref<1xf32> to memref<1x1xf32>
+  // PYPTO-NOT: pypto.read
+  // PYPTO-NOT: pypto.write
+  // PYPTO: pypto.store %[[SUM]], %[[OUT]][{{.*}}] : !pypto.tile<f32, [1, 1]>, memref<1x1xf32>
 
   %b = npuvector.broadcast %arg1 : f32 to !npuvector<16x8xf32>
   %t = npuvector.transpose %arg0, [1, 0] : !npuvector<8x16xf32> to !npuvector<16x8xf32>
   %m = arith.mulf %t, %b : !npuvector<16x8xf32>
-  %r = npuvector.reduction <add>, %m : !npuvector<16x8xf32> into f32
-  return %r : f32
+  %r = npuvector.reduction <add>, %m : !npuvector<16x8xf32> into !npuvector.f32
+  %view = memref.expand_shape %out [] output_shape [1] : memref<f32> into memref<1xf32>
+  %c0 = arith.constant 0 : index
+  npuvector.transfer_write %r, %view[%c0] : !npuvector.f32, memref<1xf32>
+  return
 }
 
 // -----
@@ -294,42 +297,37 @@ func.func @test_partial_reduction_and_casts(%arg0 : !npuvector<4x8xi32>) -> !npu
 
 // -----
 
-func.func @test_rank1_full_reduction(%arg0 : !npuvector<3072xf32>) -> f32 {
+func.func @test_rank1_full_reduction(%arg0 : !npuvector<3072xf32>, %out : memref<f32>) {
   // CHECK-LABEL: func.func @test_rank1_full_reduction(
   // CHECK-SAME: %arg0: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP32
   // CHECK-SAME: %arg1: !emitpy.opaque<"pl.Tensor{{[^"]*}}pl.FP32
   // CHECK-SAME: attributes {emitpy.out_args = array<i64: 1>, emitpy.pypto_kernel}
   // CHECK: %[[V0:.*]] = emitpy.call_opaque "pl.load"(%arg0)
-  // A rank-1 tile is viewed as [8, N/8] so the row reduction leaves an
-  // allocatable [8, 1] tile -- a [1, N] view would reduce to [1, 1],
-  // which the device cannot allocate.
-  // CHECK: %[[R:.*]] = emitpy.call_opaque "pl.reshape"(%[[V0]])
-  // CHECK: %[[ROW_TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
-  // CHECK: %[[ROW:.*]] = emitpy.call_opaque "pl.row_sum"(%[[R]], %[[ROW_TMP]])
-  // The surviving row sums are read out and combined with scalar arith,
-  // mapped onto the infix addf pseudo-callee.
-  // CHECK: %[[S0:.*]] = emitpy.call_opaque "pl.read"(%[[ROW]])
-  // CHECK: %[[S1:.*]] = emitpy.call_opaque "pl.read"(%[[ROW]])
-  // CHECK: %[[A:.*]] = emitpy.call_opaque "addf"(%[[S0]], %[[S1]])
-  // CHECK: %[[S2:.*]] = emitpy.call_opaque "pl.read"(%[[ROW]])
-  // CHECK: emitpy.call_opaque "addf"(%[[A]], %[[S2]])
-  // The scalar result is written straight into the [1] output tensor.
-  // CHECK: emitpy.call_opaque "pl.write"(%arg1, {{.*}})
+  // Reshape the rank-1 input to a single row and reduce it on device.
+  // CHECK: %[[ROW:.*]] = emitpy.call_opaque "pl.reshape"(%[[V0]]) {{.*}}[1, 3072]
+  // CHECK: %[[TMP:.*]] = emitpy.call_opaque "pl.create_tile"()
+  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.row_sum"(%[[ROW]], %[[TMP]])
+  // CHECK-NOT: "pl.read"
+  // CHECK-NOT: "pl.write"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[SUM]], %{{.*}})
 
-  // The [8, N/8] reshape view, the scratch tile, the reduction and the
-  // scalar reads ride in the pypto layer after the first stage; the
-  // combine chain keeps scalar arith.
   // PYPTO-LABEL: func.func @test_rank1_full_reduction(
-  // PYPTO: pypto.reshape %arg0 : !pypto.tile<f32, [3072]> to !pypto.tile<f32, [8, 384]>
-  // PYPTO: %[[ROW_TMP:.*]] = pypto.create_tile : <f32, [8, 384]>
-  // PYPTO: %[[ROW:.*]] = pypto.reduction sum, row, {{.*}}, %[[ROW_TMP]] : {{.*}} -> f32
-  // PYPTO: %[[S0:.*]] = pypto.read %[[ROW]][%c0, %c0_0] : f32 -> f32
-  // PYPTO: %[[S1:.*]] = pypto.read %[[ROW]][%c1, %c0_1] : f32 -> f32
-  // PYPTO: %[[A:.*]] = arith.addf %[[S0]], %[[S1]] : f32
-  // PYPTO: pypto.write %arg1[{{.*}}], {{.*}} : memref<1xf32>, f32
+  // PYPTO: %[[ROW:.*]] = pypto.reshape %arg0 : !pypto.tile<f32, [3072]> to !pypto.tile<f32, [1, 3072]>
+  // PYPTO: %[[TMP:.*]] = pypto.create_tile : <f32, [1, 3072]>
+  // PYPTO: %[[SUM:.*]] = pypto.reduction sum, row, %[[ROW]], %[[TMP]] : {{.*}} -> !pypto.tile<f32, [1, 1]>
+  // PYPTO-NOT: pypto.read
+  // PYPTO-NOT: pypto.write
+  // PYPTO: %[[OUT_VIEW:.*]] = pypto.reshape %arg1 : memref<f32> to memref<1xf32>
+  // PYPTO-NEXT: %[[OUT:.*]] = pypto.reshape %[[OUT_VIEW]] : memref<1xf32> to memref<1x1xf32>
+  // PYPTO-NOT: pypto.read
+  // PYPTO-NOT: pypto.write
+  // PYPTO: pypto.store %[[SUM]], %[[OUT]][{{.*}}] : !pypto.tile<f32, [1, 1]>, memref<1x1xf32>
 
-  %r = npuvector.reduction <add>, %arg0 : !npuvector<3072xf32> into f32
-  return %r : f32
+  %r = npuvector.reduction <add>, %arg0 : !npuvector<3072xf32> into !npuvector.f32
+  %view = memref.expand_shape %out [] output_shape [1] : memref<f32> into memref<1xf32>
+  %c0 = arith.constant 0 : index
+  npuvector.transfer_write %r, %view[%c0] : !npuvector.f32, memref<1xf32>
+  return
 }
 
 // -----
@@ -1005,22 +1003,22 @@ func.func @test_padded_cmp_narrow_cast(%arg0 : memref<1x6xf32>, %arg1 : memref<1
 
 // -----
 
-// Widen the BF16 block containing the input element before the masked fill.
+// Lower a singleton masked fill to padded tile operations.
 func.func @scalar_bf16_masked_fill(%mask : memref<32xi8>, %input : memref<32xbf16>, %output : memref<32xbf16>, %offset : index) {
   // PYPTO-LABEL: func.func @scalar_bf16_masked_fill(
   // PYPTO: pypto.spmd (%{{.*}}) in (1) {
-  // PYPTO: %[[MASK:.*]] = pypto.read %arg0[%arg3] : memref<32xi8> -> i8
-  // PYPTO-NEXT: %[[ZERO:[a-zA-Z0-9_]+]] = arith.constant 0 : index
-  // PYPTO-NEXT: %[[BLOCK_SIZE:.*]] = arith.constant 16 : index
-  // PYPTO-NEXT: %[[COLUMN:.*]] = arith.remsi %arg3, %[[BLOCK_SIZE]] : index
-  // PYPTO-NEXT: %[[START:.*]] = arith.subi %arg3, %[[COLUMN]] : index
-  // PYPTO-NEXT: %[[INPUT:.*]] = pypto.load %arg1[%[[START]]] : memref<32xbf16> -> !pypto.tile<bf16, [16]>
-  // PYPTO-NEXT: %[[WIDE_TILE:.*]] = pypto.cast %[[INPUT]] : !pypto.tile<bf16, [16]> to !pypto.tile<f32, [16]>
-  // PYPTO-NEXT: %[[WIDE:.*]] = pypto.read %[[WIDE_TILE]][%[[COLUMN]]] : !pypto.tile<f32, [16]> -> f32
-  // PYPTO: %[[COND:.*]] = arith.cmpi ne, %[[MASK]], {{.*}} : i8
-  // PYPTO: %[[SELECTED:.*]] = arith.select %[[COND]], {{.*}}, %[[WIDE]] : f32
-  // PYPTO: %[[RESULT:.*]] = pypto.cast %[[SELECTED]] : f32 to bf16
-  // PYPTO: pypto.write {{.*}}, %[[RESULT]] : {{.*}}, bf16
+  // PYPTO: %[[MASK_WIDTH:.*]] = arith.constant 32 : index
+  // PYPTO-NEXT: %[[MASK_VALID:.*]] = arith.constant 1 : index
+  // PYPTO-NEXT: %[[MASK:.*]] = pypto.load %arg0[%arg3] padded[%[[MASK_WIDTH]]] valid[%[[MASK_VALID]]] : memref<32xi8> -> !pypto.tile<i8, [32]>
+  // PYPTO: %[[WIDTH:.*]] = arith.constant 32 : index
+  // PYPTO-NEXT: %[[VALID:.*]] = arith.constant 1 : index
+  // PYPTO-NEXT: %[[INPUT:.*]] = pypto.load %arg1[%arg3] padded[%[[WIDTH]]] valid[%[[VALID]]] : memref<32xbf16> -> !pypto.tile<bf16, [32]>
+  // PYPTO-NEXT: %[[WIDE:.*]] = pypto.cast %[[INPUT]] : !pypto.tile<bf16, [32]> to !pypto.tile<f32, [32]>
+  // PYPTO: %[[COND:.*]] = pypto.cmp ne, %[[MASK]], {{.*}} -> !pypto.tile<i1, [32]>
+  // PYPTO: %[[SELECTED:.*]] = pypto.select %[[COND]], %{{.*}}, %[[WIDE]] :
+  // PYPTO: %[[RESULT:.*]] = pypto.cast %[[SELECTED]] : !pypto.tile<f32, [32]> to !pypto.tile<bf16, [32]>
+  // PYPTO: %[[ROW:.*]] = pypto.reshape %[[RESULT]] extents[{{.*}}] valid[{{.*}}] : !pypto.tile<bf16, [32]> to !pypto.tile<bf16, [1, 32]>
+  // PYPTO: pypto.store %[[ROW]], %{{.*}}[%{{.*}}, %arg3] : !pypto.tile<bf16, [1, 32]>, memref<1x32xbf16>
 
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
@@ -1046,15 +1044,14 @@ func.func @scalar_bf16_masked_fill(%mask : memref<32xi8>, %input : memref<32xbf1
 // A partial final BF16 block must not read beyond the logical row.
 func.func @scalar_bf16_wide_row(%input : memref<1x1000xbf16>, %output : memref<1x1000xf32>, %offset : index) {
   // PYPTO-LABEL: func.func @scalar_bf16_wide_row(
-  // PYPTO: %[[SIZE:.*]] = arith.constant 16 : index
-  // PYPTO: %[[COL:.*]] = arith.remsi %arg2, %[[SIZE]] : index
-  // PYPTO: %[[START:.*]] = arith.subi %arg2, %[[COL]] : index
-  // PYPTO: %[[WIDTH:.*]] = arith.constant 1000 : index
-  // PYPTO: %[[LEFT:.*]] = arith.subi %[[WIDTH]], %[[START]] : index
-  // PYPTO: %[[VALID:.*]] = pypto.min %[[LEFT]], %[[SIZE]]
-  // PYPTO: %[[BLOCK:.*]] = pypto.load %arg0[{{.*}}, %[[START]]] padded[{{.*}}, %[[SIZE]]] valid[{{.*}}, %[[VALID]]] : memref<1x1000xbf16> -> !pypto.tile<bf16, [1, 16]>
-  // PYPTO: %[[FP32:.*]] = pypto.cast %[[BLOCK]] : !pypto.tile<bf16, [1, 16]> to !pypto.tile<f32, [1, 16]>
-  // PYPTO: pypto.read %[[FP32]][{{.*}}, %[[COL]]] : !pypto.tile<f32, [1, 16]> -> f32
+  // PYPTO: pypto.spmd (%{{.*}}) in (1) {
+  // PYPTO-NEXT: %[[PAD_ROW:.*]] = arith.constant 1 : index
+  // PYPTO: %[[VALID_ROW:.*]] = arith.constant 1 : index
+  // PYPTO-NEXT: %[[SIZE:.*]] = arith.constant 16 : index
+  // PYPTO-NEXT: %[[VALID_COL:.*]] = arith.constant 1 : index
+  // PYPTO-NEXT: %[[BLOCK:.*]] = pypto.load %arg0[%c0, %arg2] padded[%[[PAD_ROW]], %[[SIZE]]] valid[%[[VALID_ROW]], %[[VALID_COL]]] : memref<1x1000xbf16> -> !pypto.tile<bf16, [1, 16]>
+  // PYPTO-NEXT: %[[FP32:.*]] = pypto.cast %[[BLOCK]] : !pypto.tile<bf16, [1, 16]> to !pypto.tile<f32, [1, 16]>
+  // PYPTO-NEXT: pypto.store %[[FP32]], %arg1[%c0, %arg2] : !pypto.tile<f32, [1, 16]>, memref<1x1000xf32>
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %zero = arith.constant 0.0 : bf16
@@ -1105,22 +1102,32 @@ func.func @test_spmd_rank0_workspace(%arg0 : memref<32xf32>, %arg1 : memref<32xf
   // the flat offset is the block id scaled by the padded row stride.
   // CHECK: emitpy.spmd_scope (%[[BLK:.*]]) in (32) {
   // CHECK: %[[OFF:.*]] = emitpy.call_opaque "muli"(%[[BLK]], %{{.*}}) : (index, index) -> index
-  // CHECK: emitpy.call_opaque "pl.write"(%arg2, {{.*}}%[[OFF]]) {{.*}}: (!emitpy.opaque<"pl.Tensor{{\[\[1, 512\], pl\.FP32\]}}">, f32, index, index) -> ()
-  // CHECK: %[[ACC:.*]] = emitpy.call_opaque "pl.read"(%arg2, {{.*}}%[[OFF]]) {{.*}}: (!emitpy.opaque<"pl.Tensor{{\[\[1, 512\], pl\.FP32\]}}">, index, index) -> f32
-  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "addf"({{.*}}%[[ACC]]) : (f32, f32) -> f32
-  // CHECK: emitpy.call_opaque "pl.write"(%arg2, {{.*}}%[[SUM]], {{.*}}%[[OFF]]) {{.*}}: (!emitpy.opaque<"pl.Tensor{{\[\[1, 512\], pl\.FP32\]}}">, f32, index, index) -> ()
+  // CHECK: emitpy.literal "0" : index
+  // CHECK: emitpy.call_opaque "pl.reshape"{{.*}} -> !emitpy.opaque<"pl.Tile{{\[\[1, 8\]}}, pl.FP32]">
+  // CHECK-NEXT: %[[INIT:[0-9]+]] = emitpy.call_opaque "pl.slice"(%{{.*}}) {{.*}}[1, 1]{{.*}} "valid_shape"
+  // CHECK-NEXT: emitpy.call_opaque "pl.store"(%[[INIT]], %arg2, %{{.*}}, %[[OFF]])
+  // CHECK: %[[INPUT:.*]] = emitpy.call_opaque "pl.load"(%arg0, %[[BLK]])
+  // CHECK: %[[ACC:.*]] = emitpy.call_opaque "pl.load"(%arg2, %{{.*}}, %[[OFF]]) {{.*}}[1, 8]{{.*}}[1, 1]
+  // CHECK: %[[VIEW:.*]] = emitpy.call_opaque "pl.reshape"(%[[ACC]])
+  // CHECK: %[[SUM:.*]] = emitpy.call_opaque "pl.add"(%[[INPUT]], %[[VIEW]])
+  // CHECK: %[[ROW:.*]] = emitpy.call_opaque "pl.reshape"(%[[SUM]])
+  // CHECK: %[[RESULT:.*]] = emitpy.call_opaque "pl.slice"(%[[ROW]]) {{.*}}[1, 1]{{.*}} "valid_shape"
+  // CHECK: emitpy.call_opaque "pl.store"(%[[RESULT]], %arg2, %{{.*}}, %[[OFF]])
 
-  // After the first stage the workspace is already a [1, 512] InOut memref
-  // parameter and the scalar accesses become indexed pypto reads/writes.
+  // The promoted workspace uses padded tile accesses at the block offset.
   // PYPTO-LABEL: func.func @test_spmd_rank0_workspace(
   // PYPTO-SAME: %arg2: memref<1x512xf32>
   // PYPTO-SAME: attributes {emitpy.inout_args = array<i64: 2>, emitpy.out_args = array<i64: 1>, emitpy.pypto_kernel}
   // PYPTO: pypto.spmd (%[[BLK:.*]]) in (32) {
-  // PYPTO: %[[OFF:.*]] = arith.muli %[[BLK]], %{{.*}} : index
-  // PYPTO: pypto.write %arg2[%{{.*}}, %[[OFF]]], %{{.*}} : memref<1x512xf32>, f32
-  // PYPTO: %[[ACC:.*]] = pypto.read %arg2[%{{.*}}, %[[OFF]]] : memref<1x512xf32> -> f32
-  // PYPTO: %[[SUM:.*]] = arith.addf %{{.*}}, %[[ACC]] : f32
-  // PYPTO: pypto.write %arg2[%{{.*}}, %[[OFF]]], %[[SUM]] : memref<1x512xf32>, f32
+  // PYPTO: %[[STRIDE:.*]] = arith.constant 16 : index
+  // PYPTO: %[[OFF:.*]] = arith.muli %[[BLK]], %[[STRIDE]] : index
+  // PYPTO: pypto.store %{{.*}}, %arg2[%{{.*}}, %[[OFF]]] : !pypto.tile<f32, [1, 8]>, memref<1x512xf32>
+  // PYPTO: %[[INPUT:.*]] = pypto.load %arg0[%[[BLK]]]
+  // PYPTO: %[[ACC:.*]] = pypto.load %arg2[%{{.*}}, %[[OFF]]] padded[{{.*}}] valid[{{.*}}] : memref<1x512xf32> -> !pypto.tile<f32, [1, 8]>
+  // PYPTO: %[[VIEW:.*]] = pypto.reshape %[[ACC]] : !pypto.tile<f32, [1, 8]> to !pypto.tile<f32, [8]>
+  // PYPTO: %[[SUM:.*]] = pypto.add %[[INPUT]], %[[VIEW]] : {{.*}} to !pypto.tile<f32, [1]>
+  // PYPTO: %[[ROW:.*]] = pypto.reshape %[[SUM]] extents[{{.*}}] valid[{{.*}}] : !pypto.tile<f32, [1]> to !pypto.tile<f32, [1, 1]>
+  // PYPTO: pypto.store %[[ROW]], %arg2[%{{.*}}, %[[OFF]]] : !pypto.tile<f32, [1, 1]>, memref<1x512xf32>
 
   %cf0 = arith.constant 0.0 : f32
   scf.forall (%blk) in (32) {

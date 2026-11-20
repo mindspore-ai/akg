@@ -57,7 +57,8 @@ Value validExtentsSource(Operation *op) {
   if (isa_and_nonnull<pypto::RowExpandAddOp, pypto::RowExpandSubOp, pypto::RowExpandMulOp, pypto::RowExpandDivOp,
                       pypto::ColExpandAddOp, pypto::ColExpandSubOp, pypto::ColExpandMulOp, pypto::ColExpandDivOp>(op))
     return op->getOperand(0);
-  if (auto select = dyn_cast_or_null<pypto::SelectOp>(op)) return select.getTrueValue();
+  if (auto select = dyn_cast_or_null<pypto::SelectOp>(op))
+    return isa<TileType>(select.getTrueValue().getType()) ? select.getTrueValue() : select.getFalseValue();
   if (op && isSameShapeOp(op)) {
     auto tile = llvm::find_if(op->getOperands(), [](Value operand) { return isa<TileType>(operand.getType()); });
     if (tile != op->operand_end()) return *tile;
@@ -65,18 +66,30 @@ Value validExtentsSource(Operation *op) {
   return {};
 }
 
-ValueRange materializeRowSumInputValidExtents(Value value) {
+ValueRange sourceValidExtents(Value value) {
   Operation *def = value.getDefiningOp();
   if (auto load = dyn_cast_or_null<pypto::LoadOp>(def)) return load.getValidExtents();
   if (auto view = dyn_cast_or_null<pypto::ReshapeOp>(def)) {
     if (!view.getValidExtents().empty()) return view.getValidExtents();
-    if (view.getSource().getType() == value.getType()) return materializeRowSumInputValidExtents(view.getSource());
+    return sourceValidExtents(view.getSource());
+  }
+  if (Value source = validExtentsSource(def)) return sourceValidExtents(source);
+  return {};
+}
+
+ValueRange materializeRowReductionInputValidExtents(Value value) {
+  Operation *def = value.getDefiningOp();
+  if (auto load = dyn_cast_or_null<pypto::LoadOp>(def)) return load.getValidExtents();
+  if (auto view = dyn_cast_or_null<pypto::ReshapeOp>(def)) {
+    if (!view.getValidExtents().empty()) return view.getValidExtents();
+    if (view.getSource().getType() == value.getType())
+      return materializeRowReductionInputValidExtents(view.getSource());
     return {};
   }
   if (auto transpose = dyn_cast_or_null<pypto::TransposeOp>(def)) {
     auto type = dyn_cast<TileType>(value.getType());
     if (!type || type.getRank() != 2 || !type.hasStaticShape()) return {};
-    ValueRange valid = materializeRowSumInputValidExtents(transpose.getSource());
+    ValueRange valid = materializeRowReductionInputValidExtents(transpose.getSource());
     if (valid.size() != 2) return {};
     // PL transpose does not carry its source window into the output tile.
     // Stamp the permuted window on the data as well as the reduction scratch.
@@ -87,7 +100,7 @@ ValueRange materializeRowSumInputValidExtents(Value value) {
     value.replaceAllUsesExcept(view.getResult(), view.getOperation());
     return view.getValidExtents();
   }
-  if (Value source = validExtentsSource(def)) return materializeRowSumInputValidExtents(source);
+  if (Value source = validExtentsSource(def)) return materializeRowReductionInputValidExtents(source);
   return {};
 }
 
@@ -174,6 +187,13 @@ std::string shapeToString(ArrayRef<int64_t> shape) {
 // Checks that every tile-shaped value in `values` shares one static shape.
 // Plain scalars (which broadcast) and opaque tensors (whose shape the
 // lowering guards) are exempt.
+static bool compatibleShape(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
+  return lhs.size() == rhs.size() && llvm::all_of(llvm::zip(lhs, rhs), [](auto dims) {
+    auto [a, b] = dims;
+    return a == b || ShapedType::isDynamic(a) || ShapedType::isDynamic(b);
+  });
+}
+
 LogicalResult verifySameShape(Operation *op, ArrayRef<Value> values) {
   std::optional<SmallVector<int64_t>> expected;
   for (Value value : values) {
@@ -183,12 +203,18 @@ LogicalResult verifySameShape(Operation *op, ArrayRef<Value> values) {
     }
     if (!expected) {
       expected = shape;
-    } else if (*shape != *expected) {
+    } else if (!compatibleShape(*shape, *expected)) {
       return op->emitOpError("tile operands/results must share one shape, got ")
              << shapeToString(*expected) << " and " << shapeToString(*shape);
     }
   }
   return success();
+}
+
+LogicalResult verifyAlignedSelect(pypto::SelectOp op) {
+  if (failed(verifySameShape(op, {op.getTrueValue(), op.getFalseValue(), op.getResult()})))
+    return failure();
+  return verifySameShape(op, {op.getTrueValue(), op.getCondition()});
 }
 
 LogicalResult verifyAlignedTileFull(pypto::TileFullOp op) {
@@ -242,7 +268,7 @@ LogicalResult verifyAlignedTranspose(pypto::TransposeOp op) {
   if (srcShape && dstShape) {
     SmallVector<int64_t> expected = *srcShape;
     std::swap(expected[i], expected[j]);
-    if (expected != *dstShape) {
+    if (!compatibleShape(expected, *dstShape)) {
       return op.emitOpError("expected result shape ")
              << shapeToString(expected) << " for axes " << i << " and " << j << ", got " << shapeToString(*dstShape);
     }
@@ -308,13 +334,13 @@ LogicalResult verifyAlignedReduction(pypto::ReductionOp op) {
   SmallVector<int64_t> expected(*vectorShape);
   size_t folded = op.getAxis() == ReduceAxis::row ? expected.size() - 1 : 0;
   expected[folded] = 1;
-  if (*resultShape != expected) {
+  if (!compatibleShape(*resultShape, expected)) {
     // During the incremental lowering a partial reduction keeps the source
     // lower-rank type instead (the folded axis is dropped); the folded
     // extent is 1, so col-major flat indexing stays equivalent.
     SmallVector<int64_t> lowered(*vectorShape);
     lowered.erase(lowered.begin() + folded);
-    if (*resultShape == lowered) {
+    if (compatibleShape(*resultShape, lowered)) {
       return success();
     }
     return op.emitOpError("the reduction is keepdim: expected result shape ")
@@ -398,6 +424,7 @@ LogicalResult verifyAlignedOperation(Operation *operation) {
   if (auto op = dyn_cast<pypto::ReinterpretViewOp>(operation)) return verifyAlignedReinterpretView(op);
   if (auto op = dyn_cast<pypto::ReductionOp>(operation)) return verifyAlignedReduction(op);
   if (auto op = dyn_cast<pypto::LoadOp>(operation)) return verifyAlignedLoad(op);
+  if (auto op = dyn_cast<pypto::SelectOp>(operation)) return verifyAlignedSelect(op);
   if (isSameShapeOp(operation) || isa<pypto::MaxOp, pypto::MinOp>(operation)) {
     SmallVector<Value> values(operation->getOperands());
     llvm::append_range(values, operation->getResults());
@@ -423,7 +450,7 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
   SmallVector<unsigned> parents;
   SmallVector<int64_t> bounds;
   SmallVector<std::pair<unsigned, int64_t>> requiredAlignments;
-  SmallVector<pypto::ReductionOp> rowSums;
+  SmallVector<pypto::ReductionOp> rowReductions;
 
   unsigned root(unsigned axis) {
     while (parents[axis] != axis) {
@@ -437,7 +464,9 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
     a = root(a);
     b = root(b);
     if (a == b) return success();
-    if ((bounds[a] < 0 || bounds[b] < 0) && bounds[a] != bounds[b]) return failure();
+    // A dynamic axis carries its runtime extent in the operation. Keep it
+    // independent of static allocation bounds while aligning the other axes.
+    if ((bounds[a] < 0 || bounds[b] < 0) && bounds[a] != bounds[b]) return success();
     parents[b] = a;
     bounds[a] = std::max(bounds[a], bounds[b]);
     return success();
@@ -458,11 +487,30 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
     return success();
   }
 
+  static bool isSingletonColumnView(pypto::ReshapeOp view) {
+    auto input = dyn_cast<TileType>(view.getSource().getType());
+    auto result = dyn_cast<TileType>(view.getResult().getType());
+    return input && result && input.getRank() == 1 &&
+           result.getRank() == 2 && result.getShape().back() == 1 &&
+           (result.getShape().front() == 1 || result.getShape().front() == input.getShape().front()) &&
+           view.getValidExtents().empty();
+  }
+
   LogicalResult mapReshapeShape(pypto::ReshapeOp op) {
     Value src = op->getOperand(0), dst = op->getResult(0);
     if (!axes.count(src) || !axes.count(dst)) return success();
     auto a = cast<pypto::TileType>(src.getType()).getShape();
     auto b = cast<pypto::TileType>(dst.getType()).getShape();
+    if (isSingletonColumnView(op)) {
+      requiredAlignments.emplace_back(axes[src][0], allocationUnit(cast<TileType>(src.getType()).getElementType()));
+      return join(axes[src][0], axes[dst][0]);
+    }
+    if (a == ArrayRef<int64_t>({1}) && b == ArrayRef<int64_t>({1, 1})) {
+      return join(axes[src][0], axes[dst][1]);
+    }
+    if (a == ArrayRef<int64_t>({1, 1}) && b == ArrayRef<int64_t>({1})) {
+      return join(axes[src][0], axes[dst][0]);
+    }
     if (a == b) return equalShapes(ValueRange{src, dst});
     SmallVector<unsigned> ai, bi;
     for (auto [i, dim] : llvm::enumerate(a))
@@ -477,8 +525,11 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
     return success();
   }
 
-  LogicalResult collectRowSumConstraints(pypto::ReductionOp op) {
-    if (op.getKind() != pypto::ReduceKind::sum || op.getAxis() != ReduceAxis::row) return success();
+  LogicalResult collectRowReductionConstraints(pypto::ReductionOp op) {
+    auto kind = op.getKind();
+    if (op.getAxis() != ReduceAxis::row ||
+        (kind != pypto::ReduceKind::sum && kind != pypto::ReduceKind::max && kind != pypto::ReduceKind::min))
+      return success();
     Value input = op.getVector(), result = op.getResult();
     auto inputType = dyn_cast<TileType>(input.getType());
     auto resultType = dyn_cast<TileType>(result.getType());
@@ -493,24 +544,40 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
     // Row-major input and col-major output have different contiguous axes.
     requiredAlignments.emplace_back(axes[input][1], allocationUnit(inputType.getElementType()));
     requiredAlignments.emplace_back(axes[result][0], allocationUnit(resultType.getElementType()));
-    rowSums.push_back(op);
+    rowReductions.push_back(op);
+    return success();
+  }
+
+  LogicalResult collectSliceConstraints(pypto::SliceOp slice) {
+    Value source = slice.getSource(), result = slice.getResult();
+    if (slice.getDropDims() || !axes.count(source) || !axes.count(result) ||
+        axes[source].empty() || axes[source].size() != axes[result].size() || slice.getWindow().empty())
+      return success();
+    APInt offset;
+    auto type = cast<TileType>(source.getType());
+    if (slice.getWindow().back() > 1 && slice.getWindow().back() == type.getShape().back() &&
+        !slice.getOffsets().empty() &&
+        matchPattern(slice.getOffsets().back(), m_ConstantInt(&offset)) && offset.isZero())
+      return join(axes[source].back(), axes[result].back());
+    return success();
+  }
+
+  LogicalResult collectTransposeConstraints(pypto::TransposeOp transpose) {
+    Value src = transpose.getSource(), dst = transpose.getResult();
+    if (!axes.count(src) || !axes.count(dst)) return success();
+    if (axes[src].size() != axes[dst].size()) return failure();
+    // Output padding belongs to the corresponding input axis, not the
+    // same numbered axis. Keep the valid window on the original load.
+    auto mapped = axes[src];
+    std::swap(mapped[transpose.getI()], mapped[transpose.getJ()]);
+    for (auto [a, b] : llvm::zip(mapped, axes[dst]))
+      if (failed(join(a, b))) return failure();
     return success();
   }
 
   LogicalResult collectConstraints(Operation *op) {
-    if (auto reduction = dyn_cast<pypto::ReductionOp>(op)) return collectRowSumConstraints(reduction);
-    if (auto transpose = dyn_cast<pypto::TransposeOp>(op)) {
-      Value src = transpose.getSource(), dst = transpose.getResult();
-      if (!axes.count(src) || !axes.count(dst)) return success();
-      if (axes[src].size() != axes[dst].size()) return failure();
-      // Output padding belongs to the corresponding input axis, not the
-      // same numbered axis. Keep the valid window on the original load.
-      auto mapped = axes[src];
-      std::swap(mapped[transpose.getI()], mapped[transpose.getJ()]);
-      for (auto [a, b] : llvm::zip(mapped, axes[dst]))
-        if (failed(join(a, b))) return failure();
-      return success();
-    }
+    if (auto reduction = dyn_cast<pypto::ReductionOp>(op)) return collectRowReductionConstraints(reduction);
+    if (auto transpose = dyn_cast<pypto::TransposeOp>(op)) return collectTransposeConstraints(transpose);
     // These families require all tile operands/results to share one shape.
     // Broadcast vectors instead constrain only their non-broadcast axis.
     if (isSameShapeOp(op)) {
@@ -519,6 +586,7 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
       return equalShapes(values);
     }
     if (auto view = dyn_cast<pypto::ReshapeOp>(op)) return mapReshapeShape(view);
+    if (auto slice = dyn_cast<pypto::SliceOp>(op)) return collectSliceConstraints(slice);
     StringRef name = op->getName().getStringRef();
     if (!name.starts_with("pypto.row_expand_") && !name.starts_with("pypto.col_expand_")) return success();
     Value carrier = op->getOperand(0), vector = op->getOperand(1), result = op->getResult(0);
@@ -529,6 +597,15 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
     return join(axes[vector][axis], axes[result][axis]);
   }
 
+  SmallVector<bool> collectRowKeepDims() {
+    SmallVector<bool> rowKeepDims(parents.size(), false);
+    for (auto reduction : rowReductions) {
+      auto &resultAxes = axes[reduction.getResult()];
+      if (resultAxes.size() == 2) rowKeepDims[root(resultAxes.back())] = true;
+    }
+    return rowKeepDims;
+  }
+
   void solveShapes(ArrayRef<Operation *> ops) {
     // Supported element widths give power-of-two alignment units, so their
     // maximum satisfies every allocation sharing an axis. Only activate a
@@ -537,20 +614,27 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
     SmallVector<int64_t> alignment(parents.size(), 1);
     SmallVector<SmallVector<unsigned>> dependents(parents.size());
     SmallVector<unsigned> pending;
+    auto rowKeepDims = collectRowKeepDims();
     for (auto [axis, unit] : requiredAlignments) {
       unsigned group = root(axis);
       alignment[group] = std::max(alignment[group], unit);
       pending.push_back(group);
     }
     for (Operation *op : ops) {
-      if (!isa<pypto::LoadOp, pypto::TileFullOp>(op)) continue;
+      if (!isa<pypto::LoadOp, pypto::TileFullOp, pypto::CastOp>(op)) continue;
       Value value = op->getResult(0);
       if (!axes.count(value) || axes[value].empty()) continue;
       auto type = cast<pypto::TileType>(value.getType());
-      unsigned bits = type.getElementType().getIntOrFloatBitWidth();
-      if (bits < 8) continue;
+      Type element = type.getElementType();
+      if (!TileType::isValidElementType(element)) continue;
       unsigned last = root(axes[value].back());
-      alignment[last] = std::max(alignment[last], int64_t(256 / bits));
+      // A row reduction's keepdim column is not a contiguous allocation axis.
+      if (isa<pypto::CastOp>(op) && rowKeepDims[last]) continue;
+      int64_t unit = allocationUnit(element);
+      alignment[last] = std::max(alignment[last], unit);
+      if (isa<pypto::LoadOp>(op) && type.getShape().back() > 0 &&
+          type.getShape().back() % unit != 0)
+        pending.push_back(last);
       for (auto [axis, old] : llvm::zip(axes[value], type.getShape())) {
         unsigned group = root(axis);
         dependents[group].push_back(last);
@@ -588,8 +672,9 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
           return size;
         };
         auto planned = ArrayRef<int64_t>(shapes[result]);
-        if (!src.empty() && !dst.empty() && !view.getValidExtents().empty() && prefixSize(src) > 0 &&
-            prefixSize(src) == prefixSize(dst) && llvm::equal(src.drop_back(), planned.drop_back()) &&
+        if (!src.empty() && !dst.empty() && !view.getValidExtents().empty() &&
+            (prefixSize(src) < 0 || prefixSize(src) == prefixSize(dst)) &&
+            llvm::equal(src.drop_back(), planned.drop_back()) &&
             planned.back() == dst.back())
           continue;
         SmallVector<int64_t> a, b;
@@ -602,10 +687,11 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
     return success();
   }
 
-  bool inheritsRowSumValidExtents(Value value) {
+  bool inheritsRowReductionValidExtents(Value value) {
     while (value) {
       Operation *def = value.getDefiningOp();
-      if (auto reduction = dyn_cast_or_null<pypto::ReductionOp>(def)) return llvm::is_contained(rowSums, reduction);
+      if (auto reduction = dyn_cast_or_null<pypto::ReductionOp>(def))
+        return llvm::is_contained(rowReductions, reduction);
       if (auto reshape = dyn_cast_or_null<pypto::ReshapeOp>(def)) {
         value = reshape.getSource();
         continue;
@@ -613,6 +699,88 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
       value = validExtentsSource(def);
     }
     return false;
+  }
+
+  LogicalResult rewriteSliceAllocation(pypto::SliceOp slice, ArrayRef<int64_t> shape) {
+    auto source = dyn_cast<TileType>(slice.getSource().getType());
+    if (!source || slice.getDropDims() || source.getRank() != static_cast<int64_t>(shape.size()) ||
+        slice.getOffsets().empty() ||
+        ![&]() {
+          APInt value;
+          return matchPattern(slice.getOffsets().back(), m_ConstantInt(&value)) && value.isZero();
+        }() ||
+        llvm::any_of(llvm::zip(shape, source.getShape()), [](auto dims) {
+          return std::get<0>(dims) > std::get<1>(dims);
+        })) {
+      return slice.emitError("cannot extend the slice within its aligned source");
+    }
+    slice.setWindowAttr(DenseI64ArrayAttr::get(&getContext(), shape));
+    return success();
+  }
+
+  void rewriteFullAllocation(pypto::TileFullOp full, TileType type, ArrayRef<int64_t> shape,
+                             OpBuilder &builder, llvm::function_ref<SmallVector<Value>(ArrayRef<int64_t>)> constants) {
+    Value result = full->getResult(0);
+    // Broadcast carriers already have a valid re-view. Other full tiles
+    // (notably mask-unpack branches) must retain their old valid window.
+    full->setOperands(constants(shape));
+    SmallVector<OpOperand *> uses;
+    for (OpOperand &use : result.getUses()) {
+      if (isa<pypto::ReshapeOp>(use.getOwner()) ||
+          use.getOwner()->getName().getStringRef().starts_with("pypto.col_expand_"))
+        continue;
+      uses.push_back(&use);
+    }
+    if (!uses.empty()) {
+      builder.setInsertionPointAfter(full);
+      auto physical = constants(shape);
+      auto valid = constants(type.getShape());
+      auto viewType = pypto::TileType::get(&getContext(), type.getElementType(), shape);
+      Value view =
+        builder.create<pypto::ReshapeOp>(full.getLoc(), viewType, result, ValueRange(physical), ValueRange(valid));
+      for (OpOperand *use : uses) use->set(view);
+    }
+  }
+
+  LogicalResult rewriteReshapeAllocation(pypto::ReshapeOp view, Value result, pypto::TileType type,
+                                          ArrayRef<int64_t> shape, OpBuilder &builder,
+                                          llvm::function_ref<SmallVector<Value>(ArrayRef<int64_t>)> constants) {
+    auto original = type.getShape();
+    if (!isSingletonColumnView(view) && original.size() == 2 && original.front() == 1 && shape.front() > 1 &&
+        view.getSource().getDefiningOp() && isa<TileType>(view.getSource().getType()) &&
+        cast<TileType>(view.getSource().getType()).getRank() == 1) {
+      SmallVector<int64_t> rowShape{1, shape.back()};
+      view.getExtentsMutable().assign(constants(rowShape));
+      result.setType(TileType::get(&getContext(), type.getElementType(), rowShape));
+      SmallVector<OpOperand *> uses;
+      llvm::transform(result.getUses(), std::back_inserter(uses), [](OpOperand &use) { return &use; });
+      builder.setInsertionPointAfter(view);
+      auto expandedType = TileType::get(&getContext(), type.getElementType(), shape);
+      Value expanded = builder.create<pypto::FillPadExpandOp>(view.getLoc(), expandedType, result,
+                                                              builder.getStringAttr("zero"));
+      auto extents = constants(shape);
+      SmallVector<Value> valid;
+      ValueRange sourceValid = sourceValidExtents(view.getSource());
+      if (sourceValid.size() == 1) {
+        valid.push_back(builder.create<arith::ConstantIndexOp>(view.getLoc(), 1));
+        valid.push_back(sourceValid.front());
+      } else if (sourceValid.size() == 2) {
+        llvm::append_range(valid, sourceValid);
+      } else {
+        valid = constants(original);
+      }
+      Value window = builder.create<pypto::ReshapeOp>(view.getLoc(), expandedType, expanded, extents, valid);
+      for (OpOperand *use : uses) use->set(window);
+      shapes[result] = rowShape;
+      return success();
+    }
+    // PL reshape preserves the row sum's valid region through unit axes.
+    // The old physical result shape can be larger than that region.
+    if (view.getValidExtents().empty() && !inheritsRowReductionValidExtents(view.getSource()) &&
+        !isSingletonColumnView(view))
+      view.getValidExtentsMutable().assign(constants(type.getShape()));
+    view.getExtentsMutable().assign(constants(shape));
+    return success();
   }
 
   LogicalResult rewriteAllocation(Value result, pypto::TileType type, ArrayRef<int64_t> shape) {
@@ -634,36 +802,16 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
       load.getPaddedShapesMutable().assign(constants(shape));
       load.getValidExtentsMutable().assign(kept);
     } else if (auto full = dyn_cast<pypto::TileFullOp>(op)) {
-      // Broadcast carriers already have a valid re-view. Other full tiles
-      // (notably mask-unpack branches) must retain their old valid window.
-      full->setOperands(constants(shape));
-      SmallVector<OpOperand *> uses;
-      for (OpOperand &use : result.getUses()) {
-        if (isa<pypto::ReshapeOp>(use.getOwner()) ||
-            use.getOwner()->getName().getStringRef().starts_with("pypto.col_expand_"))
-          continue;
-        uses.push_back(&use);
-      }
-      if (!uses.empty()) {
-        builder.setInsertionPointAfter(op);
-        auto physical = constants(shape);
-        auto valid = constants(type.getShape());
-        auto viewType = pypto::TileType::get(&getContext(), type.getElementType(), shape);
-        Value view =
-          builder.create<pypto::ReshapeOp>(op->getLoc(), viewType, result, ValueRange(physical), ValueRange(valid));
-        for (OpOperand *use : uses) use->set(view);
-      }
+      rewriteFullAllocation(full, type, shape, builder, constants);
+    } else if (auto slice = dyn_cast<pypto::SliceOp>(op)) {
+      return rewriteSliceAllocation(slice, shape);
     } else if (auto view = dyn_cast<pypto::ReshapeOp>(op)) {
-      // PL reshape preserves the row sum's valid region through unit axes.
-      // The old physical result shape can be larger than that region.
-      if (view.getValidExtents().empty() && !inheritsRowSumValidExtents(view.getSource()))
-        view.getValidExtentsMutable().assign(constants(type.getShape()));
-      view.getExtentsMutable().assign(constants(shape));
+      return rewriteReshapeAllocation(view, result, type, shape, builder, constants);
     }
     return success();
   }
 
-  void rewriteRowSumScratch(pypto::ReductionOp op) {
+  void rewriteRowReductionScratch(pypto::ReductionOp op) {
     Value input = op.getVector();
     auto inputType = cast<TileType>(input.getType());
     auto scratch = op.getScratch().getDefiningOp<pypto::CreateTileOp>();
@@ -673,7 +821,7 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
     Shape shape{std::max(oldShape[0], inputShape[0]), std::max(oldShape[1], inputShape[1])};
     int64_t unit = allocationUnit(type.getElementType());
     shape[1] = llvm::alignTo(shape[1], unit);
-    ValueRange valid = materializeRowSumInputValidExtents(input);
+    ValueRange valid = materializeRowReductionInputValidExtents(input);
     if (valid.size() != 2) valid = scratch.getValidExtents();
     if (oldShape == ArrayRef<int64_t>(shape) && llvm::equal(valid, scratch.getValidExtents())) return;
 
@@ -690,15 +838,18 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
       if (it == shapes.end()) continue;
       auto type = cast<pypto::TileType>(result.getType());
       if (type.getShape() == ArrayRef<int64_t>(it->second)) continue;
-      if (llvm::any_of(it->second, [](int64_t dim) { return dim < 0; }))
+      if (!isSameShapeOp(op) && !isa<pypto::TransposeOp>(op) && !op->getName().getStringRef().contains("_expand_") &&
+          llvm::any_of(it->second, [](int64_t dim) { return dim < 0; }))
         return op->emitError("shape alignment requires static allocation bounds");
-      if (!isSameShapeOp(op) && !isa<pypto::LoadOp, pypto::TileFullOp, pypto::ReshapeOp, pypto::TransposeOp>(op) &&
+      if (!isSameShapeOp(op) && !isa<pypto::LoadOp, pypto::TileFullOp,
+                                 pypto::ReshapeOp, pypto::TransposeOp, pypto::SliceOp>(op) &&
           !op->getName().getStringRef().contains("_expand_") &&
-          !llvm::is_contained(rowSums, dyn_cast<pypto::ReductionOp>(op)))
+          !llvm::is_contained(rowReductions, dyn_cast<pypto::ReductionOp>(op)))
         return op->emitError("shape alignment reached an unsupported producer");
       if (failed(checkReshapeUsers(result, type.getShape()))) return failure();
       if (failed(rewriteAllocation(result, type, it->second))) return failure();
-      result.setType(pypto::TileType::get(&getContext(), type.getElementType(), it->second));
+      if (result.getType() == type)
+        result.setType(pypto::TileType::get(&getContext(), type.getElementType(), it->second));
     }
     return success();
   }
@@ -709,7 +860,7 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
     parents.clear();
     bounds.clear();
     requiredAlignments.clear();
-    rowSums.clear();
+    rowReductions.clear();
     SmallVector<Operation *> ops;
     getOperation().walk([&](Operation *op) {
       ops.push_back(op);
@@ -736,7 +887,7 @@ struct PyptoAlignShapePass : impl::PyptoAlignShapeBase<PyptoAlignShapePass> {
       signalPassFailure();
       return;
     }
-    for (auto reduction : rowSums) rewriteRowSumScratch(reduction);
+    for (auto reduction : rowReductions) rewriteRowReductionScratch(reduction);
     if (getOperation()
           .walk([](Operation *op) {
             return failed(verifyAlignedOperation(op)) ? WalkResult::interrupt() : WalkResult::advance();
