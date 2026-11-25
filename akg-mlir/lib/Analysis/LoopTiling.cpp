@@ -24,6 +24,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <thread>
 #include <unordered_set>
 
 #include "akg/Analysis/BufferAnalysis.h"
@@ -52,6 +53,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -814,6 +816,30 @@ static void collectParallelPrefixDims(ArrayRef<mlir::scf::ForOp> band, ArrayRef<
   }
 }
 
+void collectStaticUnitParallelLoops(func::FuncOp func, ArrayRef<scf::ForOp> band, ArrayRef<unsigned> outerTiles,
+                                    SmallVectorImpl<scf::ForOp> &loops) {
+  loops.clear();
+  if (band.empty() || band.front()->getNumResults() != 0) {
+    return;
+  }
+  SmallVector<unsigned, kSmallVectorSizeSix> dims;
+  collectParallelPrefixDims(band, outerTiles, dims);
+  int64_t totalTiles = 1;
+  const int64_t cores = getNpuCoreNum(func);
+  for (unsigned dim : dims) {
+    int64_t work = 0;
+    if (!getStaticParallelTileWork(band[dim], outerTiles[dim], work) || work > cores / totalTiles) {
+      return;
+    }
+    totalTiles *= work;
+  }
+  for (unsigned dim : dims) {
+    if (outerTiles[dim] == 1) {
+      loops.push_back(band[dim]);
+    }
+  }
+}
+
 static Value emitLoopTripCountInCurrentFunc(Location loc, OpBuilder &builder, mlir::scf::ForOp loop) {
   int64_t staticTripCount = 0;
   if (getStaticTripCount(loop, staticTripCount)) {
@@ -1318,7 +1344,19 @@ static LogicalResult calculateTileSizesForBands(func::FuncOp funcOp, bool useAut
   initGraph->setIsDynamicShape(isDynamicShape);
   initGraph->setTilingMode("auto");
 
-  auto modelGraph = buildModelGraph(initGraph, enablePto);
+  // Strategy construction uses a diagnostic-only interface. Propagate its
+  // errors before the solver can synthesize defaults for an incomplete plan.
+  bool strategyError = false;
+  auto modelGraph = [&] {
+    const auto thread = std::this_thread::get_id();
+    ScopedDiagnosticHandler handler(funcOp.getContext(), [&](Diagnostic &diagnostic) {
+      if (thread == std::this_thread::get_id() && diagnostic.getSeverity() == DiagnosticSeverity::Error)
+        strategyError = true;
+      return failure();  // Forward the diagnostic to the caller's handler.
+    });
+    return buildModelGraph(initGraph, enablePto);
+  }();
+  if (strategyError) return failure();
   auto solver = getHeuristicTilingSolver(modelGraph);
   levelToTile = modelGraph->levelToTile;
 

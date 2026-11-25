@@ -10,6 +10,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -22,7 +23,10 @@ struct PeakAnalysisInput {
   llvm::DenseMap<scf::ForOp, int64_t> tileUpperBoundPerLoop;
   llvm::DenseMap<scf::ForOp, bool> isReduceXorAllVectorizeLoop;
   llvm::DenseMap<scf::ForOp, bool> isWholeTiledLoop;
+  llvm::DenseSet<scf::ForOp> unitParallelLoops;
   bool enablePto = false;
+  bool planVecAllocations = false;
+  int64_t vecUbLimitBytes = 0;
   bool enableMultibuffer = true;
   bool alignBufferSizeTo256Bits = true;
 };
@@ -30,6 +34,7 @@ struct PeakAnalysisInput {
 struct PeakAnalysisResult {
   int64_t PeakBits{-1};
   bool valid{false};
+  bool hasVecAllocations{false};
 };
 
 void estimatePeakForTiling(const PeakAnalysisInput &input, PeakAnalysisResult &out);
