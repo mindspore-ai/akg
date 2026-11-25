@@ -24,9 +24,11 @@ func.func @test_elementwise(%arg0 : memref<32x32xf32>, %arg1 : memref<32x32xf32>
 
 // -----
 
-func.func @test_tile_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 {
+func.func @test_tile_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32, %out : memref<f32>) {
   // CHECK-LABEL: def test_tile_ops(
   // CHECK: inputs: pl.Tensor{{.*}}pl.FP32], inputs_0: pl.Scalar{{.*}}pl.FP32], inputs_1: pl.Out{{.*}}pl.FP32
+  // CHECK: [[OUT_VIEW:var_[0-9]+]] = pl.reshape(inputs_1, [1])
+  // CHECK-NEXT: [[OUT:var_[0-9]+]] = pl.reshape([[OUT_VIEW]], [1, 1])
   // CHECK: with pl.at(level=pl.Level.CORE_GROUP):
   // Tile parameters are loaded into tiles at the entry.
   // CHECK: {{.*}} = pl.load(inputs,
@@ -34,44 +36,49 @@ func.func @test_tile_ops(%arg0 : !npuvector<8x16xf32>, %arg1 : f32) -> f32 {
   // A broadcast scalar feeding the arith mul fuses onto its native
   // tile-first scalar operand: no carrier tile is materialized.
   // CHECK: {{.*}} = pl.mul({{.*}}, inputs_0)
-  // A full reduction row-reduces on device; the surviving rows are read out
-  // and combined with scalar arith -- spelled as the infix `+` the parser
-  // maps onto pto.addf -- and the result is written straight into
-  // the [1] output tensor.
-  // CHECK: {{.*}} = pl.row_sum(
-  // CHECK: {{.*}} = pl.read(
-  // CHECK: {{.*}} = ({{.*}} + {{.*}})
-  // CHECK: pl.write(inputs_1,
+  // Reduce both axes on device and store the resulting tile.
+  // CHECK: [[ROWS:var_[0-9]+]] = pl.row_sum(
+  // CHECK: [[ROW:var_[0-9]+]] = pl.reshape([[ROWS]], [1, 16])
+  // CHECK: [[TMP:var_[0-9]+]] = pl.create_tile([1, 16],
+  // CHECK: [[SUM:var_[0-9]+]] = pl.row_sum([[ROW]], [[TMP]])
+  // CHECK-NOT: pl.read(
+  // CHECK-NOT: pl.write(
+  // CHECK-NEXT: pl.store([[SUM]], [0, 0], [[OUT]])
   // CHECK: return inputs_1
 
   %t = npuvector.transpose %arg0, [1, 0] : !npuvector<8x16xf32> to !npuvector<16x8xf32>
   %b = npuvector.broadcast %arg1 : f32 to !npuvector<16x8xf32>
   %m = arith.mulf %t, %b : !npuvector<16x8xf32>
-  %r = npuvector.reduction <add>, %m : !npuvector<16x8xf32> into f32
-  return %r : f32
+  %r = npuvector.reduction <add>, %m : !npuvector<16x8xf32> into !npuvector.f32
+  %view = memref.expand_shape %out [] output_shape [1] : memref<f32> into memref<1xf32>
+  %c0 = arith.constant 0 : index
+  npuvector.transfer_write %r, %view[%c0] : !npuvector.f32, memref<1xf32>
+  return
 }
 
 // -----
 
-func.func @test_rank1_full_reduction(%arg0 : !npuvector<3072xf32>) -> f32 {
+func.func @test_rank1_full_reduction(%arg0 : !npuvector<3072xf32>, %out : memref<f32>) {
   // CHECK-LABEL: def test_rank1_full_reduction(
   // CHECK: inputs: pl.Tensor{{.*}}pl.FP32], inputs_0: pl.Out{{.*}}pl.FP32
+  // CHECK: [[OUT_VIEW:var_[0-9]+]] = pl.reshape(inputs_0, [1])
+  // CHECK-NEXT: [[OUT:var_[0-9]+]] = pl.reshape([[OUT_VIEW]], [1, 1])
   // CHECK: with pl.at(level=pl.Level.CORE_GROUP):
-  // A rank-1 tile is viewed as [8, N/8]: the row reduction leaves an
-  // allocatable [8, 1] tile and the surviving sums are combined as scalars
-  // through the infix `+`.
-  // CHECK: {{.*}} = pl.load(inputs,
-  // CHECK: {{.*}} = pl.reshape({{.*}}, [8, 384])
-  // CHECK: {{.*}} = pl.create_tile([8, 384],
-  // CHECK: {{.*}} = pl.row_sum(
-  // CHECK: {{.*}} = pl.read(
-  // CHECK: {{.*}} = pl.read(
-  // CHECK: {{.*}} = ({{.*}} + {{.*}})
-  // CHECK: pl.write(inputs_0,
+  // Reshape the rank-1 input to a single row and reduce it on device.
+  // CHECK: [[IN:var_[0-9]+]] = pl.load(inputs,
+  // CHECK: [[ROW:var_[0-9]+]] = pl.reshape([[IN]], [1, 3072])
+  // CHECK: [[TMP:var_[0-9]+]] = pl.create_tile([1, 3072],
+  // CHECK: [[SUM:var_[0-9]+]] = pl.row_sum([[ROW]], [[TMP]])
+  // CHECK-NOT: pl.read(
+  // CHECK-NOT: pl.write(
+  // CHECK-NEXT: pl.store([[SUM]], [0, 0], [[OUT]])
   // CHECK: return inputs_0
 
-  %r = npuvector.reduction <add>, %arg0 : !npuvector<3072xf32> into f32
-  return %r : f32
+  %r = npuvector.reduction <add>, %arg0 : !npuvector<3072xf32> into !npuvector.f32
+  %view = memref.expand_shape %out [] output_shape [1] : memref<f32> into memref<1xf32>
+  %c0 = arith.constant 0 : index
+  npuvector.transfer_write %r, %view[%c0] : !npuvector.f32, memref<1xf32>
+  return
 }
 
 // -----

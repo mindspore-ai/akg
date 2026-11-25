@@ -121,7 +121,8 @@ class VectorToPyptoTypeConverter : public TypeConverter {
   explicit VectorToPyptoTypeConverter(MLIRContext *ctx) {
     addConversion([](Type type) { return type; });
     addConversion([](npuvector::NPUVectorType type) -> Type {
-      return pypto::TileType::get(type.getContext(), type.getElementType(), type.getShape());
+      return pypto::TileType::get(type.getContext(), type.getElementType(),
+                                  type.getRank() == 0 ? ArrayRef<int64_t>({1}) : type.getShape());
     });
   }
 };
@@ -130,14 +131,16 @@ class VectorToPyptoTypeConverter : public TypeConverter {
 /// the target dialect from the moment their defining operation is created.
 static Type pyptoType(Type type) {
   if (auto vector = dyn_cast<npuvector::NPUVectorType>(type)) {
-    return pypto::TileType::get(type.getContext(), vector.getElementType(), vector.getShape());
+    return pypto::TileType::get(type.getContext(), vector.getElementType(),
+                               vector.getRank() == 0 ? ArrayRef<int64_t>({1}) : vector.getShape());
   }
   return type;
 }
 
 static Type pyptoType(Type type, ArrayRef<int64_t> shape) {
   if (isa<npuvector::NPUVectorType, pypto::TileType>(type)) {
-    return pypto::TileType::get(type.getContext(), getElementTypeOrSelf(type), shape);
+    return pypto::TileType::get(type.getContext(), getElementTypeOrSelf(type),
+                               shape.empty() ? ArrayRef<int64_t>({1}) : shape);
   }
   return type;
 }
@@ -1303,7 +1306,20 @@ class OpToPyptoOpPattern : public OpConversionPattern<SourceOp> {
     if (fuseTileBroadcastConsumer(op, adaptor.getOperands(), rewriter)) {
       return success();
     }
-    rewriter.replaceOpWithNewOp<PyptoOp>(op, pyptoResultTypes(op, adaptor.getOperands()), adaptor.getOperands());
+    SmallVector<Value> operands(adaptor.getOperands());
+    if (operands.size() == 2) {
+      for (unsigned index : {0u, 1u}) {
+        auto input = dyn_cast<pypto::TileType>(operands[index].getType());
+        auto other = dyn_cast<pypto::TileType>(operands[1 - index].getType());
+        auto logical = dyn_cast<npuvector::NPUVectorType>(op->getOperand(index).getType());
+        if (input && other && logical && logical.getRank() == 0 && input.getRank() == 1 &&
+            !ShapedType::isDynamic(input.getShape().front()) && other.getShape() == ArrayRef<int64_t>({1, 1})) {
+          operands[index] =
+            reshapeTileOp(rewriter, op.getLoc(), operands[index], input.getShape().front(), 1, input.getElementType());
+        }
+      }
+    }
+    rewriter.replaceOpWithNewOp<PyptoOp>(op, pyptoResultTypes(op, operands), operands);
     return success();
   }
 };
@@ -1807,6 +1823,15 @@ class ArithConstantPattern : public OpConversionPattern<arith::ConstantOp> {
 /// never reads or stores past the end of the source. A statically shaped
 /// read whose row is not a whole number of 32-byte units takes the same
 /// padded/valid form, so PTOAS can allocate the tile at all.
+static Value viewZeroDimTransferBuffer(ConversionPatternRewriter &rewriter, Location loc, BlockArgument buffer,
+                                      ArrayRef<int64_t> shape) {
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(buffer.getOwner());
+  auto type = cast<MemRefType>(buffer.getType());
+  auto viewType = MemRefType::get(shape, type.getElementType(), MemRefLayoutAttrInterface{}, type.getMemorySpace());
+  return rewriter.create<pypto::ReshapeOp>(loc, viewType, mapped(rewriter, buffer), ValueRange{}, ValueRange{});
+}
+
 template <typename TransferReadOp>
 class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
  public:
@@ -1820,6 +1845,17 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
     auto shaped = dyn_cast<ShapedType>(op.getVector().getType());
     if (!shaped) {
       return rewriter.notifyMatchFailure(op, "read result must be a shaped type");
+    }
+    auto buffer = dyn_cast<BlockArgument>(op.getSource());
+    auto memref = dyn_cast<MemRefType>(op.getSource().getType());
+    if (buffer && memref && memref.getRank() == 0 && shaped.getRank() == 0) {
+      Location loc = op.getLoc();
+      Value source = viewZeroDimTransferBuffer(rewriter, loc, buffer, {1});
+      Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+      auto type = pypto::TileType::get(rewriter.getContext(), shaped.getElementType(), {1});
+      Value load = rewriter.create<pypto::LoadOp>(loc, type, source, ValueRange{zero}, ValueRange{}, ValueRange{});
+      rewriter.replaceOp(op, load);
+      return success();
     }
     if constexpr (std::is_same_v<TransferReadOp, npuvector::TransferReadOp>) {
       if (!shaped.hasStaticShape()) {
@@ -1835,7 +1871,7 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
     // padded/valid form: the allocation bound rounds up to an aligned
     // row while the valid extent keeps bounding the data actually moved.
     unsigned elemBytes = shaped.getElementType().getIntOrFloatBitWidth() / 8;
-    int64_t cols = shaped.getDimSize(shaped.getRank() - 1);
+    int64_t cols = shaped.getRank() == 0 ? 1 : shaped.getShape().back();
     bool plainRead = elemBytes == 0 || cols <= 0 || (cols * static_cast<int64_t>(elemBytes)) % 32 == 0;
     if (plainRead) {
       // PTOAS lays every tile in the block onto one grid, so even a
@@ -1867,6 +1903,46 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
   /// Rewrites a statically shaped, plain (unpadded) read into `pl.load`,
   /// restoring the tile's own shape with a `pypto.reshape` when the read is
   /// rank-reduced.
+  LogicalResult rewriteStridedColumnRead(TransferReadOp op, ShapedType shaped,
+                                         ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    Type elem = shaped.getElementType();
+    int64_t rows = shaped.getDimSize(0);
+    int64_t cols = alignExtentTo32B(1, elem.getIntOrFloatBitWidth() / 8);
+    auto constant = [&](int64_t value) { return rewriter.create<arith::ConstantIndexOp>(loc, value); };
+    Value one = constant(1), zero = constant(0), rowExtent = constant(rows), colExtent = constant(cols);
+    auto tileType = [&](ArrayRef<int64_t> shape) { return pypto::TileType::get(rewriter.getContext(), elem, shape); };
+    Value buffer = rewriter.create<pypto::LoadOp>(loc, tileType({1, rows, cols}), mapped(rewriter, op.getSource()),
+                                                   mapped(rewriter, op.getIndices()),
+                                                   ValueRange{one, rowExtent, colExtent},
+                                                   ValueRange{one, rowExtent, one});
+    Value matrix = reshapeTileOp(rewriter, loc, buffer, rows, cols, elem);
+    Value transposed = rewriter.create<pypto::TransposeOp>(loc, tileType({cols, rows}), matrix, 0, 1);
+    Value row = rewriter.create<pypto::SliceOp>(loc, tileType({1, rows}), transposed,
+                                               rewriter.getDenseI64ArrayAttr({1, rows}),
+                                               ValueRange{zero, zero}, DenseI64ArrayAttr{});
+    rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, tileType({rows}), row, ValueRange{}, ValueRange{});
+    return success();
+  }
+
+  static bool feedsRowReduction(TransferReadOp op) {
+    if constexpr (std::is_same_v<TransferReadOp, npuvector::TransferReadOp>) {
+      if (op.getVector().hasOneUse()) {
+        Operation *user = *op.getVector().getUsers().begin();
+        Value row = op.getVector();
+        if (auto add = dyn_cast<arith::AddFOp>(user); add && add.getResult().hasOneUse()) {
+          Value other = add.getLhs() == row ? add.getRhs() : add.getLhs();
+          if (isa<FloatType>(other.getType()) || other.getDefiningOp<npuvector::BroadcastOp>()) {
+            row = add.getResult();
+            user = *row.getUsers().begin();
+          }
+        }
+        return isa<npuvector::ReductionOp>(user);
+      }
+    }
+    return false;
+  }
+
   LogicalResult rewritePlainRead(TransferReadOp op, ShapedType shaped, ConversionPatternRewriter &rewriter) const {
     // A rank-reduced read (source rank > tile rank) keeps addressing
     // every source dimension: `pl.load` shares the source's coordinate
@@ -1889,6 +1965,10 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
       for (unsigned dim = 0; dim < tileRank && leadingDrop; ++dim) {
         leadingDrop = tileToSrc[dim] == srcRank - tileRank + dim;
       }
+      if (srcRank == 3 && ArrayRef<unsigned>(tileToSrc) == ArrayRef<unsigned>{1} && shaped.hasStaticShape() &&
+          shaped.getElementType().isF32()) {
+        return rewriteStridedColumnRead(op, shaped, rewriter);
+      }
       if (tileToSrc.size() == tileRank && !leadingDrop) {
         Location loc = op.getLoc();
         Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
@@ -1908,6 +1988,10 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
       Value load = rewriter.create<pypto::LoadOp>(
         op.getLoc(), pyptoLoadType(op.getVector().getType(), op.getSource(), ValueRange{}),
         mapped(rewriter, op.getSource()), mapped(rewriter, op.getIndices()), ValueRange{}, ValueRange{});
+      if (leadingDrop && srcRank == 2 && tileRank == 1 && feedsRowReduction(op)) {
+        rewriter.replaceOp(op, load);
+        return success();
+      }
       rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, pyptoExtentType(op.getVector().getType(), ValueRange()), load,
                                                     ValueRange(), ValueRange());
       return success();
@@ -1984,6 +2068,23 @@ class TransferReadPattern : public OpConversionPattern<TransferReadOp> {
       Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
       paddedValues.assign(srcRank, one);
       validValues.assign(srcRank, one);
+    }
+    if (tileRank == 0 && srcRank == 1) {
+      Value load = rewriter.create<pypto::LoadOp>(
+        loc, pyptoLoadType(op.getVector().getType(), op.getSource(), validValues),
+        mapped(rewriter, op.getSource()), mapped(rewriter, op.getIndices()), ValueRange{}, ValueRange{});
+      rewriter.replaceOp(op, load);
+      return success();
+    }
+    if (tileRank == 0 && srcRank > 0) {
+      int64_t columns = alignExtentTo32B(1, elemBytes);
+      paddedValues.back() = rewriter.create<arith::ConstantIndexOp>(loc, columns);
+      Value load = rewriter.create<pypto::LoadOp>(
+        loc, pyptoLoadType(op.getVector().getType(), op.getSource(), paddedValues),
+        mapped(rewriter, op.getSource()), mapped(rewriter, op.getIndices()), paddedValues, validValues);
+      auto flatType = pypto::TileType::get(rewriter.getContext(), shaped.getElementType(), {columns});
+      rewriter.replaceOpWithNewOp<pypto::ReshapeOp>(op, flatType, load, ValueRange{}, ValueRange{});
+      return success();
     }
     SmallVector<ReductionAxisPad> pads;
     collectReductionAxisPads(op.getVector(), 0, pads);
@@ -2200,44 +2301,24 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     }
     Location loc = op.getLoc();
 
-    // Only a one-element broadcast can be replaced by a scalar store.
-    // Larger broadcasts initialize every element, including scratch buffers.
     Value vector = op.getVector();
-    if (Value scalar = singleElementBroadcastSource(vector)) {
-      writeScalar(rewriter, loc, op.getSource(), op.getIndices(), scalar);
-      finishRewrite(rewriter, op);
-      return success();
-    }
-
-    // A scalar value into a single-element destination: 0-D and [1] tiles
-    // are the shape-normalized forms of scalars, which have no tile form on
-    // the device -- write the value directly with pl.write, addressing
-    // every destination dimension at 0.
-    auto scalarDestType = dyn_cast<ShapedType>(op.getSource().getType());
-    if (isScalarToSingleElementDest(vector, scalarDestType)) {
-      writeScalarToSingleElement(rewriter, loc, op.getSource(), vector, scalarDestType);
-      finishRewrite(rewriter, op);
-      return success();
-    }
-
-    // A scalar value into a multi-element destination: lowerZeroDimChains
-    // lowers whole single-element-tile chains onto plain scalars, so the
-    // write forwards the transfer's own coordinates to pl.write.
-    if (isa<FloatType, IntegerType, IndexType>(vector.getType())) {
-      writeScalar(rewriter, loc, op.getSource(), op.getIndices(), vector);
-      finishRewrite(rewriter, op);
-      return success();
-    }
-
     auto destType = dyn_cast<ShapedType>(op.getSource().getType());
     auto valueType = dyn_cast<ShapedType>(vector.getType());
+
+    auto buffer = dyn_cast<BlockArgument>(op.getSource());
+    if (buffer && isa<MemRefType>(buffer.getType()) && destType.getRank() == 0 && valueType &&
+        valueType.getRank() == 0) {
+      storeZeroDim(rewriter, loc, buffer, vector);
+      finishRewrite(rewriter, op);
+      return success();
+    }
 
     // Rank-1 values go through a [1, N] reshape: tile stores need a 2D
     // tile. The destination is either rank-1 (a row offset of 0 is
     // prepended) or rank-2 (the tile's own row offset is used directly).
     // The value extent may be dynamic; the read that allocated the tile
     // bounds N.
-    if (valueType && destType && valueType.getRank() == 1 && destType.hasStaticShape() &&
+    if (valueType && destType && valueType.getRank() <= 1 && destType.hasStaticShape() &&
         (destType.getRank() == 1 || destType.getRank() == 2)) {
       if (failed(storeRankOneViaReshape(rewriter, loc, op, vector, destType, valueType))) {
         return failure();
@@ -2271,56 +2352,22 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
   }
 
  private:
-  static Value singleElementBroadcastSource(Value vector) {
-    auto shaped = dyn_cast<ShapedType>(vector.getType());
-    if (!shaped || !shaped.hasStaticShape() || shaped.getNumElements() != 1) {
-      return Value();
+  static void storeZeroDim(ConversionPatternRewriter &rewriter, Location loc, BlockArgument buffer,
+                           Value vector) {
+    Value input = mapped(rewriter, vector);
+    auto tile = cast<pypto::TileType>(input.getType());
+    // A scalar output needs a two-dimensional tile and GM view for tile.store.
+    Type elementType = tile.getElementType();
+    if (tile.getRank() == 1) {
+      int64_t extent = tile.getShape().front();
+      input = elementType.isInteger(64)
+                ? reshapeTileOp(rewriter, loc, vector, extent, 1, elementType)
+                : reshapeTileWithValidOp(rewriter, loc, vector, 1, extent, 1, 1, elementType);
     }
-    return scalarBroadcastSource(vector);
-  }
-
-  /// True when `vector` is a plain scalar value stored into a statically
-  /// shaped single-element tensor.
-  static bool isScalarToSingleElementDest(Value vector, ShapedType destType) {
-    return isa<FloatType, IntegerType, IndexType>(vector.getType()) && destType && destType.hasStaticShape() &&
-           destType.getNumElements() == 1;
-  }
-
-  /// If `vector` is a scalar broadcast feeding a single user -- either the
-  /// still-unconverted broadcast op or its converted `pypto.add(carrier, s)`
-  /// form -- returns the broadcast scalar.
-  static Value scalarBroadcastSource(Value vector) {
-    auto isScalar = [](Type type) { return isa<FloatType>(type) || isa<IntegerType>(type) || isa<IndexType>(type); };
-    Operation *def = vector.getDefiningOp();
-    if (!def || !vector.hasOneUse()) {
-      return Value();
-    }
-    if (auto bcast = dyn_cast<vector::BroadcastOp>(def)) {
-      if (!isScalar(bcast.getSource().getType())) {
-        return Value();
-      }
-      return bcast.getSource();
-    }
-    if (auto bcast = dyn_cast<npuvector::BroadcastOp>(def)) {
-      if (!isScalar(bcast.getSource().getType())) {
-        return Value();
-      }
-      return bcast.getSource();
-    }
-    if (auto add = dyn_cast<pypto::AddOp>(def)) {
-      // The converted runtime-scalar broadcast: pypto.add(carrier, s)
-      // with a statically-shaped pypto.tile_full carrier.
-      Value scalar = add.getRhs();
-      if (!isScalar(scalar.getType())) {
-        return Value();
-      }
-      auto carrier = add.getLhs().getDefiningOp<pypto::TileFullOp>();
-      if (!carrier || carrier->getNumOperands() != 0) {
-        return Value();
-      }
-      return scalar;
-    }
-    return Value();
+    SmallVector<int64_t> shape(cast<pypto::TileType>(input.getType()).getRank(), 1);
+    Value dest = viewZeroDimTransferBuffer(rewriter, loc, buffer, shape);
+    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    rewriter.create<pypto::StoreOp>(loc, input, dest, SmallVector<Value>(shape.size(), zero));
   }
 
   /// Reads one scalar element out of a tile: `pl.read(tile, [k])`.
@@ -2344,17 +2391,6 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
                                     mapped(rewriter, ValueRange(offsets)));
   }
 
-  /// Writes a scalar into a single-element destination with `pl.write`,
-  /// addressing every destination dimension at 0.
-  static void writeScalarToSingleElement(ConversionPatternRewriter &rewriter, Location loc, Value dest, Value scalar,
-                                         ShapedType destType) {
-    SmallVector<Value> offsets;
-    for (int64_t d = 0; d < destType.getRank(); ++d) {
-      offsets.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
-    }
-    rewriter.create<pypto::WriteOp>(loc, mapped(rewriter, dest), mapped(rewriter, scalar),
-                                    mapped(rewriter, ValueRange(offsets)));
-  }
 
   /// The allocation bound of a dynamic rank-1 tile produced by an
   /// unconverted `transfer_read`: its first `maxSizes` entry, padded the
@@ -2579,6 +2615,55 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
   /// bounds. Statically-sized sub-32-byte rows cannot hold a tile and fall
   /// back to element-wise `pl.write`s, which require a rank-1 destination
   /// and a constant base offset.
+  static std::pair<int64_t, bool> rankOneStoreAllocation(Value vector, pypto::TileType convertedTile,
+                                                          int64_t n, int64_t validN) {
+    if (convertedTile && convertedTile.getRank() == 1 &&
+        llvm::none_of(convertedTile.getShape(), ShapedType::isDynamic)) {
+      // The converted value carries the actual allocation. Keep the
+      // source's valid count, or inherit its runtime valid region.
+      int64_t allocated = convertedTile.getShape()[0];
+      return {allocated, validN != ShapedType::kDynamic && allocated > validN};
+    } else if (auto allocation = tileAllocationShape(vector);
+        allocation && allocation->size() == 1 && !ShapedType::isDynamic((*allocation)[0]) && (*allocation)[0] > n) {
+      return {(*allocation)[0], true};
+    }
+    return {n, false};
+  }
+
+  static Value rankOneStoreView(ConversionPatternRewriter &rewriter, Location loc, TransferWriteOp op,
+                                ShapedType destType) {
+    Type viewType;
+    if (auto memrefType = dyn_cast<MemRefType>(destType)) {
+      viewType = MemRefType::get({1, memrefType.getNumElements()}, memrefType.getElementType());
+    } else {
+      auto tensorType = cast<RankedTensorType>(destType);
+      viewType = RankedTensorType::get({1, tensorType.getNumElements()}, tensorType.getElementType());
+    }
+    // The view is a tensor-level reshape: create it at function scope,
+    // next to the destination's own view chain, not beside the store.
+    // The PyPTO emitter hoists entry-level view ops above the device
+    // scope; created inside it, the reshape would be materialized as a
+    // tile op, which tile.store rejects as its destination.
+    OpBuilder::InsertionGuard guard(rewriter);
+    if (Operation *destDef = op.getSource().getDefiningOp()) {
+      rewriter.setInsertionPointAfter(destDef);
+    } else if (auto funcOp = op->template getParentOfType<func::FuncOp>()) {
+      rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+    }
+    return rewriter
+                  .create<pypto::ReshapeOp>(loc, pyptoExtentType(viewType, ValueRange()),
+                                            mapped(rewriter, op.getSource()), ValueRange(), ValueRange())
+                  .getResult();
+  }
+
+  // The singleton GM view is DN. Use a column tile for the 64-bit store.
+  static bool isSingletonColumnStore(Type elemType, int64_t validN, ShapedType destType,
+                                     pypto::TileType convertedTile) {
+    return elemType.isInteger(64) && validN == 1 && destType.getRank() == 1 &&
+           destType.getDimSize(0) == 1 && convertedTile &&
+           convertedTile.getShape() == ArrayRef<int64_t>({1});
+  }
+
   static LogicalResult storeRankOneViaReshape(ConversionPatternRewriter &rewriter, Location loc, TransferWriteOp op,
                                               Value vector, ShapedType destType, ShapedType valueType) {
     Type elemType = valueType.getElementType();
@@ -2600,27 +2685,22 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
     // allocated bound and keep the valid count: the reshape below
     // conserves allocated elements, while the store must write only the
     // valid region, which the valid-extent reshape spells out.
-    bool lifted = false;
     auto convertedTile = dyn_cast<pypto::TileType>(mapped(rewriter, vector).getType());
-    if (convertedTile && convertedTile.getRank() == 1 &&
-        llvm::none_of(convertedTile.getShape(), ShapedType::isDynamic)) {
-      // The converted value carries the actual allocation. Keep the
-      // source's valid count, or inherit its runtime valid region.
-      n = convertedTile.getShape()[0];
-      lifted = validN != ShapedType::kDynamic && n > validN;
-    } else if (auto allocation = tileAllocationShape(vector);
-        allocation && allocation->size() == 1 && !ShapedType::isDynamic((*allocation)[0]) && (*allocation)[0] > n) {
-      n = (*allocation)[0];
-      lifted = true;
-    }
+    auto [allocated, lifted] = rankOneStoreAllocation(vector, convertedTile, n, validN);
+    n = allocated;
     unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
-    if (!dynamicExtent && n * elemBytes % 32 != 0) {
+    bool alreadyRow = valueType.getRank() == 0 && convertedTile && convertedTile.getRank() == 2;
+    bool singletonColumn = isSingletonColumnStore(elemType, validN, destType, convertedTile);
+    if (!singletonColumn && valueType.getRank() != 0 && !alreadyRow && !dynamicExtent && n * elemBytes % 32 != 0) {
       // Sub-32B rows cannot hold a tile at all: fall back to
       // element-wise scalar writes.
       return storeRankOneElementWise(rewriter, loc, op, vector, destType, elemType, validN);
     }
-    Value reshaped = lifted ? reshapeTileWithValidOp(rewriter, loc, vector, 1, n, 1, validN, elemType)
-                            : reshapeTileOp(rewriter, loc, vector, 1, n, elemType);
+    bool needsValidExtents = lifted || valueType.getRank() == 0;
+    Value reshaped = singletonColumn   ? reshapeTileOp(rewriter, loc, vector, 1, 1, elemType)
+                     : alreadyRow          ? mapped(rewriter, vector)
+                     : needsValidExtents ? reshapeTileWithValidOp(rewriter, loc, vector, 1, n, 1, validN, elemType)
+                                         : reshapeTileOp(rewriter, loc, vector, 1, n, elemType);
     SmallVector<Value> offsetItems;
     Value storeDest = op.getSource();
     if (destType.getRank() == 1) {
@@ -2629,28 +2709,7 @@ class TransferWritePattern : public OpConversionPattern<TransferWriteOp> {
       // partition shape to the destination's rank, so a 2D tile needs a
       // 2D destination view.
       offsetItems.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
-      Type viewType;
-      if (auto memrefType = dyn_cast<MemRefType>(destType)) {
-        viewType = MemRefType::get({1, memrefType.getNumElements()}, memrefType.getElementType());
-      } else {
-        auto tensorType = cast<RankedTensorType>(destType);
-        viewType = RankedTensorType::get({1, tensorType.getNumElements()}, tensorType.getElementType());
-      }
-      // The view is a tensor-level reshape: create it at function scope,
-      // next to the destination's own view chain, not beside the store.
-      // The PyPTO emitter hoists entry-level view ops above the device
-      // scope; created inside it, the reshape would be materialized as a
-      // tile op, which tile.store rejects as its destination.
-      OpBuilder::InsertionGuard guard(rewriter);
-      if (Operation *destDef = op.getSource().getDefiningOp()) {
-        rewriter.setInsertionPointAfter(destDef);
-      } else if (auto funcOp = op->template getParentOfType<func::FuncOp>()) {
-        rewriter.setInsertionPointToStart(&funcOp.getBody().front());
-      }
-      storeDest = rewriter
-                    .create<pypto::ReshapeOp>(loc, pyptoExtentType(viewType, ValueRange()),
-                                              mapped(rewriter, op.getSource()), ValueRange(), ValueRange())
-                    .getResult();
+      storeDest = rankOneStoreView(rewriter, loc, op, destType);
     }
     llvm::append_range(offsetItems, op.getIndices());
     // `pypto.store` keeps the offsets as explicit index operands;
@@ -2859,10 +2918,6 @@ static std::optional<pypto::ReduceKind> reduceKind(vector::CombiningKind kind) {
   }
 }
 
-/// Whether the combining function has a scalar-form PyPTO op. All four
-/// reduction families have scalar forms (`pl.min`/`pl.max` for min/max).
-static bool hasScalarCombine(pypto::ReduceKind kind) { return true; }
-
 /// Reads one element out of a tile.
 static Value readTileElement(ConversionPatternRewriter &rewriter, Location loc, Type resultType, Value tile,
                              ArrayRef<int64_t> index) {
@@ -2875,49 +2930,11 @@ static Value readTileElement(ConversionPatternRewriter &rewriter, Location loc, 
     .getResult();
 }
 
-/// Combines two reduction partials with scalar arith; a null `acc`
-/// (the first element) passes through unchanged.
-static Value combineScalars(ConversionPatternRewriter &rewriter, Location loc, Type resultType, pypto::ReduceKind kind,
-                            Value acc, Value elem) {
-  if (!acc) {
-    return elem;
-  }
-  // Sum/prod have no type-polymorphic pypto form; spell the integer
-  // variants for integer elements.
-  bool isFloat = isa<FloatType>(resultType);
-  if (kind == pypto::ReduceKind::prod) {
-    return isFloat ? rewriter.create<arith::MulFOp>(loc, resultType, acc, elem).getResult()
-                   : rewriter.create<arith::MulIOp>(loc, resultType, acc, elem).getResult();
-  }
-  if (kind == pypto::ReduceKind::min) {
-    return rewriter.create<pypto::MinOp>(loc, pyptoType(resultType), mapped(rewriter, acc), mapped(rewriter, elem));
-  }
-  if (kind == pypto::ReduceKind::max) {
-    return rewriter.create<pypto::MaxOp>(loc, pyptoType(resultType), mapped(rewriter, acc), mapped(rewriter, elem));
-  }
-  return isFloat ? rewriter.create<arith::AddFOp>(loc, resultType, acc, elem).getResult()
-                 : rewriter.create<arith::AddIOp>(loc, resultType, acc, elem).getResult();
-}
-
-/// Renders flat element index `k` of a col-major tile with extents `dims`
-/// as an index list, e.g. [1, 2].
-static SmallVector<int64_t> flatIndexToList(ArrayRef<int64_t> dims, int64_t k) {
-  SmallVector<int64_t> index;
-  for (unsigned d = 0; d < dims.size(); ++d) {
-    int64_t stride = 1;
-    for (unsigned t = d + 1; t < dims.size(); ++t) {
-      stride *= dims[t];
-    }
-    index.push_back((k / stride) % dims[d]);
-  }
-  return index;
-}
-
 /// Rewrites reductions onto the PyPTO reduction families:
 /// - npuvector partial reductions reduce the last axis (`pl.row_*`) or the
 ///   first axis (`pl.col_*`) and consume a scratch tile;
 /// - full reductions (and `vector.reduction`) fold to a scalar through
-///   row_* then col_*, reading out the single surviving element. Rank-1
+///   successive row reductions, reading out the single surviving element. Rank-1
 ///   inputs are reshaped to [1, N] first because pl.row_* requires 2D.
 template <typename ReductionOp>
 class ReductionPattern : public OpConversionPattern<ReductionOp> {
@@ -3039,134 +3056,46 @@ class ReductionPattern : public OpConversionPattern<ReductionOp> {
     return success();
   }
 
-  /// Folds a full reduction to a scalar. Device backends cannot allocate
-  /// [1, 1] tiles, so the final value is assembled from scalar reads: when
-  /// the operand tiles are allocatable (extents a whole number of 32-byte
-  /// units) the last axis is reduced on device (`pl.row_*`) and only the
-  /// surviving elements are read out; otherwise every element is read
-  /// directly. The elements are combined with scalar-form ops --
-  /// `pl.minimum`/`pl.maximum` have no scalar form, so min/max full
-  /// reductions are rejected.
   static LogicalResult rewriteFullReduction(ReductionOp op, ConversionPatternRewriter &rewriter, pypto::ReduceKind kind,
                                             ShapedType shaped) {
+    if (!shaped.hasStaticShape() || op.getAcc()) {
+      return rewriter.notifyMatchFailure(op, "full reductions require static extents and no accumulator");
+    }
+
     Location loc = op.getLoc();
-    if (!shaped.hasStaticShape()) {
-      return rewriter.notifyMatchFailure(op, "full reductions need a statically shaped tile");
+    Value input = mapped(rewriter, op.getVector());
+    auto inputType = dyn_cast<pypto::TileType>(input.getType());
+    if (!inputType || llvm::any_of(inputType.getShape(), ShapedType::isDynamic)) {
+      return rewriter.notifyMatchFailure(op, "full reduction needs a static input tile");
     }
-    if (!hasScalarCombine(kind)) {
-      return rewriter.notifyMatchFailure(op, "full min/max reductions have no scalar-form PyPTO lowering");
-    }
-    if (op.getAcc()) {
-      return rewriter.notifyMatchFailure(op, "accumulator chaining is not supported for full reductions");
+    Type elem = inputType.getElementType();
+    SmallVector<int64_t> shape(inputType.getShape());
+    while (true) {
+      if (shape.size() == 1) {
+        shape.insert(shape.begin(), 1);
+        input = reshapeTileOp(rewriter, loc, input, 1, shape.back(), elem);
+      }
+      Value scratch = rewriter.create<pypto::CreateTileOp>(loc, input.getType(), ValueRange{});
+      shape.back() = 1;
+      auto resultType = pypto::TileType::get(rewriter.getContext(), elem, shape);
+      input = rewriter.create<pypto::ReductionOp>(loc, resultType, kind, pypto::ReduceAxis::row, input, scratch);
+      if (llvm::all_of(shape, [](int64_t extent) { return extent == 1; })) {
+        break;
+      }
+      shape.pop_back();
+      if (shape.size() > 1) {
+        auto viewType = pypto::TileType::get(rewriter.getContext(), elem, shape);
+        input = rewriter.create<pypto::ReshapeOp>(loc, viewType, input, ValueRange(), ValueRange());
+      }
     }
 
-    Type resultType = pyptoResultType(op->getResult(0));
-    Type elemType = shaped.getElementType();
-    Value input = op.getVector();
-    unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
-    // The device walks a col-major tile's contiguous (row) axis in 32-byte
-    // steps, so the smallest allocatable row extent is the quantum below
-    // (8 rows for a 4-byte dtype).
-    unsigned alignRows = 32 / std::gcd(32u, elemBytes);
-    int64_t rows = shaped.getRank() == 2 ? shaped.getDimSize(0) : 0;
-    int64_t cols = shaped.getRank() == 2 ? shaped.getDimSize(1) : 0;
-
-    Value acc;
-    if (shaped.getRank() == 1 && shaped.getNumElements() > 1 && shaped.getNumElements() % alignRows == 0 &&
-        (shaped.getNumElements() / alignRows) * elemBytes % 32 == 0) {
-      acc = reduceRankOneViaReshape(rewriter, loc, kind, shaped, resultType, input, alignRows);
-    } else if (needsPaddedFullReduction(shaped, kind)) {
-      acc = reducePaddedRankOne(rewriter, loc, kind, shaped, resultType, input, alignRows);
-    } else if (shaped.getRank() == 2 && cols > 1 && rows * elemBytes % 32 == 0 && cols * elemBytes % 32 == 0) {
-      acc = reduceViaDeviceRowReduce(rewriter, loc, kind, shaped, resultType, input, rows);
-    } else {
-      acc = reduceViaScalarChain(rewriter, loc, kind, shaped, resultType, input);
+    if (isa<npuvector::NPUVectorType>(op->getResult(0).getType())) {
+      rewriter.replaceOp(op, input);
+      return success();
     }
-    rewriter.replaceOp(op, acc);
+    SmallVector<int64_t> origin(shape.size(), 0);
+    rewriter.replaceOp(op, readTileElement(rewriter, loc, pyptoResultType(op->getResult(0)), input, origin));
     return success();
-  }
-
-  static bool needsPaddedFullReduction(ShapedType shaped, pypto::ReduceKind kind) {
-    return shaped.getRank() == 1 && shaped.getNumElements() > 256 && shaped.getElementType().isF32() &&
-           (kind == pypto::ReduceKind::sum || kind == pypto::ReduceKind::min || kind == pypto::ReduceKind::max);
-  }
-
-  static Value reducePaddedRankOne(ConversionPatternRewriter &rewriter, Location loc, pypto::ReduceKind kind,
-                                  ShapedType shaped, Type resultType, Value input, unsigned alignRows) {
-    Type elemType = shaped.getElementType();
-    unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
-    // The 2D reduction needs both axes aligned. Materialize neutral padding
-    // before reshaping instead of expanding thousands of scalar reads/ops.
-    // TFILLPAD_EXPAND copies only the source valid region, so uninitialized
-    // physical padding from a cast/load never enters the reduction.
-    int64_t valid = shaped.getNumElements();
-    int64_t physical = alignExtentTo32B(valid, elemBytes);
-    if (auto allocation = tileAllocationShape(input); allocation && allocation->size() == 1 &&
-        !ShapedType::isDynamic((*allocation)[0])) {
-      physical = std::max(physical, (*allocation)[0]);
-    }
-    int64_t quantum = alignRows * alignRows;
-    int64_t padded = llvm::divideCeil(physical, quantum) * quantum;
-    Value source = physical == valid ? reshapeTileOp(rewriter, loc, input, 1, physical, elemType)
-        : reshapeTileWithValidOp(rewriter, loc, input, 1, physical, 1, valid, elemType);
-    StringRef pad = kind == pypto::ReduceKind::sum ? "zero" :
-                    kind == pypto::ReduceKind::max ? "min" : "max";
-    Type paddedType = pypto::TileType::get(rewriter.getContext(), elemType, {1, padded});
-    Value expanded = rewriter.create<pypto::FillPadExpandOp>(loc, paddedType, source, rewriter.getStringAttr(pad));
-    return reduceRankOneViaReshape(rewriter, loc, kind, VectorType::get({padded}, elemType),
-                                 resultType, expanded, alignRows);
-  }
-
-  /// Rank-1 lowering: view the tile as [alignRows, N/alignRows] so the
-  /// device reduces the last axis into an allocatable [alignRows, 1] tile
-  /// (a [1, N] view would reduce to [1, 1], which the device cannot
-  /// allocate), then read out and combine the surviving row partials.
-  static Value reduceRankOneViaReshape(ConversionPatternRewriter &rewriter, Location loc, pypto::ReduceKind kind,
-                                       ShapedType shaped, Type resultType, Value input, unsigned alignRows) {
-    int64_t r = alignRows;
-    int64_t c = shaped.getNumElements() / r;
-    Value reshaped = reshapeTileOp(rewriter, loc, input, r, c, shaped.getElementType());
-    Value rowTmp = createTmpTile(rewriter, loc, SmallVector<int64_t>{r, c}, shaped.getElementType());
-    Value row =
-      rewriter.create<pypto::ReductionOp>(loc, pyptoType(resultType), kind, pypto::ReduceAxis::row, reshaped, rowTmp)
-        .getResult();
-    return combineRowPartials(rewriter, loc, kind, resultType, row, r);
-  }
-
-  /// Hybrid lowering: row-reduce to [rows, 1] on device, then combine the
-  /// surviving `rows` scalars.
-  static Value reduceViaDeviceRowReduce(ConversionPatternRewriter &rewriter, Location loc, pypto::ReduceKind kind,
-                                        ShapedType shaped, Type resultType, Value input, int64_t rows) {
-    Value rowTmp = createTmpTile(rewriter, loc, shaped.getShape(), shaped.getElementType());
-    Value row = rewriter
-                  .create<pypto::ReductionOp>(loc, pyptoType(resultType), kind, pypto::ReduceAxis::row,
-                                              mapped(rewriter, input), rowTmp)
-                  .getResult();
-    return combineRowPartials(rewriter, loc, kind, resultType, row, rows);
-  }
-
-  /// Reads the surviving `[i, 0]` partials out of a keepdim row reduction
-  /// and combines them with the scalar-form op.
-  static Value combineRowPartials(ConversionPatternRewriter &rewriter, Location loc, pypto::ReduceKind kind,
-                                  Type resultType, Value row, int64_t rows) {
-    Value acc;
-    for (int64_t i = 0; i < rows; ++i) {
-      Value elem = readTileElement(rewriter, loc, resultType, row, SmallVector<int64_t>{i, 0});
-      acc = combineScalars(rewriter, loc, resultType, kind, acc, elem);
-    }
-    return acc;
-  }
-
-  /// Pure scalar chain: read and combine every element.
-  static Value reduceViaScalarChain(ConversionPatternRewriter &rewriter, Location loc, pypto::ReduceKind kind,
-                                    ShapedType shaped, Type resultType, Value input) {
-    SmallVector<int64_t> dims(shaped.getShape());
-    Value acc;
-    for (int64_t k = 0, e = shaped.getNumElements(); k < e; ++k) {
-      Value elem = readTileElement(rewriter, loc, resultType, input, flatIndexToList(dims, k));
-      acc = combineScalars(rewriter, loc, resultType, kind, acc, elem);
-    }
-    return acc;
   }
 };
 
@@ -3392,7 +3321,7 @@ static Value rowExpandOntoCarrier(ShapedType shapedResult, Location loc, StringR
       rowsExtent = constant(1);
       for (unsigned axis = 0; axis + 1 < rank; ++axis) {
         Value dim = vecBounds.empty() ? constant(vecShape[axis]) : vecBounds[axis];
-        rowsExtent = rewriter.create<arith::MulIOp>(loc, rowsExtent, dim);
+        rowsExtent = rewriter.createOrFold<arith::MulIOp>(loc, rowsExtent, dim);
       }
     }
     return rowsExtent;
@@ -3619,6 +3548,65 @@ static void appendLiftConservedExtents(const SmallVector<bool> &isDropped, unsig
 /// ferried to the tail, lifted with a row expand against a zero
 /// carrier, and ferried back (the outbound ferry is shape-only,
 /// the dropped axis being a singleton).
+// Static working shapes leave the runtime bounds list empty.
+static SmallVector<Value> buildLiftBounds(ArrayRef<int64_t> shape, ValueRange axisBounds, Location loc,
+                                          ConversionPatternRewriter &rewriter) {
+  if (llvm::none_of(shape, ShapedType::isDynamic)) {
+    return {};
+  }
+  SmallVector<Value> bounds;
+  for (auto [axis, dim] : llvm::enumerate(shape)) {
+    bounds.push_back(ShapedType::isDynamic(dim) ? axisBounds[axis]
+                                              : rewriter.create<arith::ConstantIndexOp>(loc, dim).getResult());
+  }
+  return bounds;
+}
+
+// Insert singleton dimensions on the broadcast axes and retain the source
+// allocation bounds on the other axes.
+static std::pair<SmallVector<int64_t>, SmallVector<int64_t>>
+initialLiftShapes(npuvector::NPUVectorType source, ArrayRef<bool> dropped,
+                  const std::optional<SmallVector<int64_t>> &allocation) {
+  SmallVector<int64_t> shape, allocatedShape;
+  unsigned sourceAxis = 0;
+  for (bool isDropped : dropped) {
+    if (isDropped) {
+      shape.push_back(1);
+      allocatedShape.push_back(1);
+      continue;
+    }
+    int64_t extent = source.getDimSize(sourceAxis);
+    shape.push_back(extent);
+    allocatedShape.push_back(allocation ? (*allocation)[sourceAxis] : extent);
+    ++sourceAxis;
+  }
+  return {std::move(shape), std::move(allocatedShape)};
+}
+
+static SmallVector<Value> broadcastValidExtents(npuvector::BroadcastOp op, ShapedType resultType, Location loc,
+                                                ConversionPatternRewriter &rewriter);
+
+static Value restoreLiftedSingletonWindow(npuvector::BroadcastOp op, ShapedType resultType, Value cur,
+                                          ConversionPatternRewriter &rewriter) {
+  Location loc = op.getLoc();
+  auto expand = cur.getDefiningOp<pypto::ColExpandAddOp>();
+  if (expand) {
+    auto allocation = cast<pypto::TileType>(expand.getTile().getType());
+    if (allocation.hasStaticShape() && allocation.getShape() != resultType.getShape()) {
+      cur.setType(allocation);
+      SmallVector<Value> bounds;
+      auto constant = [&](int64_t dim) -> Value { return rewriter.create<arith::ConstantIndexOp>(loc, dim); };
+      llvm::transform(allocation.getShape(), std::back_inserter(bounds), constant);
+      auto valid = broadcastValidExtents(op, resultType, loc, rewriter);
+      if (valid.empty()) {
+        llvm::transform(resultType.getShape(), std::back_inserter(valid), constant);
+      }
+      cur = rewriter.create<pypto::ReshapeOp>(loc, allocation, cur, bounds, mapped(rewriter, ValueRange(valid)));
+    }
+  }
+  return cur;
+}
+
 static LogicalResult materializeGeneralLift(npuvector::BroadcastOp op, ShapedType resultType,
                                             npuvector::NPUVectorType srcType, ArrayRef<int64_t> dimension,
                                             ConversionPatternRewriter &rewriter) {
@@ -3639,44 +3627,27 @@ static LogicalResult materializeGeneralLift(npuvector::BroadcastOp op, ShapedTyp
     return failure();
   }
   auto shapedResult = cast<ShapedType>(convertedResult);
-  auto constant = [&](int64_t v) { return rewriter.create<arith::ConstantIndexOp>(loc, v); };
   auto srcAlloc = tileAllocationShape(op.getSource());
   SmallVector<Value> axisBounds = liftAxisBounds(isDropped, rank, srcType, srcAlloc, *extents, loc, rewriter);
-  // Per-dimension runtime bounds of a working shape, one value per
-  // axis; an all-static shape carries none, mirroring the pypto
-  // ops' empty-extents convention.
-  auto makeBounds = [&](const SmallVector<int64_t> &shape) -> SmallVector<Value> {
-    if (llvm::none_of(shape, [](int64_t d) { return ShapedType::isDynamic(d); })) {
-      return {};
-    }
-    SmallVector<Value> bounds;
-    for (auto [axis, dim] : llvm::enumerate(shape)) {
-      bounds.push_back(ShapedType::isDynamic(dim) ? axisBounds[axis] : constant(dim));
-    }
-    return bounds;
-  };
-  // Start from the source reshaped with a singleton at every dropped
-  // axis; identity axes carry the source extents over.
-  SmallVector<int64_t> curShape;
-  SmallVector<int64_t> curAllocShape;
-  unsigned sourceDim = 0;
-  for (unsigned resultDim = 0; resultDim < rank; ++resultDim) {
-    curShape.push_back(isDropped[resultDim] ? 1 : srcType.getDimSize(sourceDim));
-    curAllocShape.push_back(
-      isDropped[resultDim] ? 1 : (srcAlloc ? (*srcAlloc)[sourceDim] : srcType.getDimSize(sourceDim)));
-    if (!isDropped[resultDim])
-      ++sourceDim;
-  }
-  SmallVector<Value> curBounds = makeBounds(curShape);
+  auto [curShape, curAllocShape] = initialLiftShapes(srcType, isDropped, srcAlloc);
+  SmallVector<Value> curBounds = buildLiftBounds(curShape, axisBounds, loc, rewriter);
   SmallVector<Value> curExtents;
   SmallVector<Value> curValid;
   appendLiftConservedExtents(isDropped, rank, srcRank, srcAlloc, curShape, loc, curExtents, curValid, rewriter);
-  Value cur = rewriter.create<pypto::ReshapeOp>(
-    loc,
-    pyptoExtentType(pyptoType(shapedResult.clone(curShape)),
-                    curExtents.empty() ? ValueRange(curBounds) : ValueRange(curExtents)),
-    mapped(rewriter, op.getSource()), curExtents.empty() ? ValueRange(curBounds) : ValueRange(curExtents),
-    mapped(rewriter, ValueRange(curValid)));
+  Value cur = mapped(rewriter, op.getSource());
+  auto sourceTile = dyn_cast<pypto::TileType>(cur.getType());
+  bool singleton = srcRank == 0 && rank == 2 && sourceTile;
+  bool singletonColumn = singleton && sourceTile.getRank() == 2 && sourceTile.getShape().back() == 1;
+  // A rank-zero source may already occupy a padded column. The first
+  // row expand can consume that column directly.
+  if (!singletonColumn) {
+    cur = rewriter.create<pypto::ReshapeOp>(
+      loc,
+      pyptoExtentType(pyptoType(shapedResult.clone(curShape)),
+                      curExtents.empty() ? ValueRange(curBounds) : ValueRange(curExtents)),
+      mapped(rewriter, op.getSource()), curExtents.empty() ? ValueRange(curBounds) : ValueRange(curExtents),
+      mapped(rewriter, ValueRange(curValid)));
+  }
   std::string zero = isa<FloatType>(resultType.getElementType()) ? "0.0" : "0";
   // Lift one dropped axis at a time, tail first so every expand only
   // meets already-lifted axes behind the one it broadcasts.
@@ -3684,13 +3655,24 @@ static LogicalResult materializeGeneralLift(npuvector::BroadcastOp op, ShapedTyp
     unsigned dropped = *droppedIt;
     SmallVector<int64_t> targetShape = curShape;
     targetShape[dropped] = resultType.getDimSize(dropped);
-    SmallVector<Value> targetBounds = makeBounds(targetShape);
+    SmallVector<Value> targetBounds = buildLiftBounds(targetShape, axisBounds, loc, rewriter);
     cur = liftDroppedAxis(shapedResult, loc, zero, rank, dropped, cur, curShape, curAllocShape, curBounds, targetShape,
                           targetBounds, rewriter);
+    if (singleton && dropped == 1 && !ShapedType::isDynamic(targetShape.back())) {
+      // The subsequent column expand consumes one row. Keep the
+      // allocated column width, including any padding, in that view.
+      auto expanded = cast<pypto::TileType>(cur.getType());
+      SmallVector<int64_t> rowShape{1, expanded.getShape().back()};
+      auto row = pypto::TileType::get(rewriter.getContext(), expanded.getElementType(), rowShape);
+      Value zeroIndex = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+      cur = rewriter.create<pypto::SliceOp>(loc, row, cur, rewriter.getDenseI64ArrayAttr(rowShape),
+                                           ValueRange{zeroIndex, zeroIndex}, DenseI64ArrayAttr{});
+    }
     curShape = std::move(targetShape);
     curAllocShape = curShape;
     curBounds = std::move(targetBounds);
   }
+  if (singleton) cur = restoreLiftedSingletonWindow(op, resultType, cur, rewriter);
   rewriter.replaceOp(op, cur);
   return success();
 }
@@ -3833,6 +3815,40 @@ static std::pair<Type, SmallVector<Value>> liftedVectorView(npuvector::Broadcast
 /// expand still combines same-shaped tiles. The identity-mapped axis
 /// must agree on extent and staticality, or a constant source could
 /// be reshaped past its allocation bound.
+static Value expandSingletonToVector(Value source, Location loc, int64_t cols,
+                                                    ConversionPatternRewriter &rewriter) {
+  auto tile = dyn_cast<pypto::TileType>(source.getType());
+  if (!tile || tile.getRank() > 2 ||
+      (tile.getRank() == 2 && !llvm::is_contained(tile.getShape(), 1))) {
+    return {};
+  }
+  int64_t allocated = alignExtentTo32B(cols, (tile.getElementType().getIntOrFloatBitWidth() + 7) / 8);
+  auto rowType = pypto::TileType::get(rewriter.getContext(), tile.getElementType(), {1, allocated});
+  Value carrier = rewriter.create<pypto::TileFullOp>(loc, rowType, rewriter.getStringAttr("0"), ValueRange{});
+  Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+  if (tile.getRank() == 1) {
+    source = reshapeTileOp(rewriter, loc, source, tile.getShape().front(), 1, tile.getElementType());
+  } else if (tile.getShape().back() != 1) {
+    auto singleton = pypto::TileType::get(rewriter.getContext(), tile.getElementType(), {1, 1});
+    source = rewriter.create<pypto::SliceOp>(loc, singleton, source, rewriter.getDenseI64ArrayAttr({1, 1}),
+                                             ValueRange{zero, zero}, DenseI64ArrayAttr{});
+  }
+  Value expanded = rewriter.create<pypto::RowExpandAddOp>(loc, rowType, carrier, source);
+  auto result = pypto::TileType::get(rewriter.getContext(), tile.getElementType(), {allocated});
+  Value row = rewriter.create<pypto::SliceOp>(loc, rowType, expanded, rewriter.getDenseI64ArrayAttr({1, allocated}),
+                                              ValueRange{zero, zero}, DenseI64ArrayAttr{});
+  return rewriter.create<pypto::ReshapeOp>(loc, result, row, ValueRange{}, ValueRange{});
+}
+
+static LogicalResult materializeSingletonVector(npuvector::BroadcastOp op, ShapedType resultType,
+                                                ConversionPatternRewriter &rewriter) {
+  Value expanded = expandSingletonToVector(mapped(rewriter, op.getSource()), op.getLoc(),
+                                            resultType.getDimSize(0), rewriter);
+  if (!expanded) return failure();
+  rewriter.replaceOp(op, expanded);
+  return success();
+}
+
 static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, ShapedType resultType,
                                                 ConversionPatternRewriter &rewriter) {
   ArrayRef<int64_t> dimension = op.getDimension();
@@ -3841,6 +3857,9 @@ static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, Shape
   auto srcType = dyn_cast<npuvector::NPUVectorType>(op.getSource().getType());
   if (!srcType) {
     return failure();
+  }
+  if (srcType.getRank() == 0 && resultType.getRank() == 1 && resultType.hasStaticShape()) {
+    return materializeSingletonVector(op, resultType, rewriter);
   }
   // The row/col spelling below only covers rank-2 promotions of a
   // rank-1 source; a [0]/[1] lift onto a higher-rank result falls
@@ -3851,12 +3870,6 @@ static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, Shape
     return materializeGeneralLift(op, resultType, srcType, dimension, rewriter);
   }
 
-  if (resultType.getRank() != 2) {
-    return failure();
-  }
-  if (srcType.getRank() != 1) {
-    return failure();
-  }
   // The lifted axis is the identity mapping, so the source and result
   // extents must match — on staticality too.
   unsigned axis = rowLift ? 0 : 1;
@@ -3946,6 +3959,20 @@ static LogicalResult materializeLiftedBroadcast(npuvector::BroadcastOp op, Shape
 /// `materializeLiftedBroadcast` — the tile twin of the runtime-scalar
 /// zero-carrier trick; other tile-to-tile broadcasts have no PyPTO
 /// counterpart.
+static std::optional<std::string> broadcastLiteralText(Value source) {
+  std::optional<std::string> constText;
+  if (auto constOp = source.getDefiningOp<arith::ConstantOp>()) {
+    if (auto floatAttr = dyn_cast<FloatAttr>(constOp.getValue())) {
+      constText = floatToPythonText(floatAttr.getValue());
+    } else if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+      if (!intAttr.getType().isInteger(1)) {
+        constText = intToPythonText(intAttr.getValue());
+      }
+    }
+  }
+  return constText;
+}
+
 template <typename BroadcastOp>
 class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
  public:
@@ -3967,7 +3994,10 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
       return rewriter.notifyMatchFailure(op, "element type has no PyPTO dtype");
     }
     Type sourceType = op.getSource().getType();
-    if (!isa<FloatType, IntegerType, IndexType>(sourceType)) {
+    auto sourceVector = dyn_cast<npuvector::NPUVectorType>(sourceType);
+    bool dynamicSingleton = sourceVector && sourceVector.getRank() == 0 &&
+                            resultType.getRank() == 1 && !resultType.hasStaticShape();
+    if (!dynamicSingleton && !isa<FloatType, IntegerType, IndexType>(sourceType)) {
       // A rank-1 tile source lifted onto a rank-2 result materializes as
       // a pure promotion; other tile-to-tile broadcasts have no PyPTO
       // counterpart.
@@ -3979,6 +4009,12 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
       return rewriter.notifyMatchFailure(op, "only scalar broadcasts map onto pl.tile.full/pl.expands");
     }
 
+    return materializeScalarBroadcast(op, resultType, dynamicSingleton, rewriter);
+  }
+
+ private:
+  static LogicalResult materializeScalarBroadcast(BroadcastOp op, ShapedType resultType, bool dynamicSingleton,
+                                                  ConversionPatternRewriter &rewriter) {
     Location loc = op.getLoc();
     Type convertedResult = pyptoResultType(op->getResult(0));
 
@@ -3999,6 +4035,11 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
     // shape of the siblings its result merges with downstream; a static
     // result spells no extents, so the raise materializes them per axis.
     raiseStaticSiblingPad(op.getResult(), resultType, op.getLoc(), *extents, validExtents, rewriter);
+    if (resultType.getRank() == 0 && validExtents.empty()) {
+      int64_t bytes = (resultType.getElementType().getIntOrFloatBitWidth() + 7) / 8;
+      extents->push_back(rewriter.create<arith::ConstantIndexOp>(loc, alignExtentTo32B(1, bytes)));
+      validExtents.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 1));
+    }
     convertedResult = pyptoExtentType(convertedResult, *extents);
 
     auto materializeFull = [&](StringRef value) -> Value {
@@ -4015,24 +4056,24 @@ class BroadcastPattern : public OpConversionPattern<BroadcastOp> {
         .getResult();
     };
 
-    std::optional<std::string> constText;
-    if (auto constOp = op.getSource().template getDefiningOp<arith::ConstantOp>()) {
-      if (auto floatAttr = dyn_cast<FloatAttr>(constOp.getValue())) {
-        constText = floatToPythonText(floatAttr.getValue());
-      } else if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
-        if (!intAttr.getType().isInteger(1)) {
-          constText = intToPythonText(intAttr.getValue());
-        }
-      }
-    }
+    auto constText = broadcastLiteralText(op.getSource());
 
     Value result;
     if (constText) {
       result = materializeFull(*constText);
     } else {
-      std::string zero = isa<FloatType>(sourceType) ? "0.0" : "0";
+      Value scalar = mapped(rewriter, op.getSource());
+      if (dynamicSingleton) {
+        auto tile = dyn_cast<pypto::TileType>(scalar.getType());
+        if (!tile || tile.getRank() != 1) {
+          return rewriter.notifyMatchFailure(op, "expected a rank-1 tile for a scalar broadcast");
+        }
+        Value index = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+        scalar = rewriter.create<pypto::ReadOp>(loc, pyptoType(tile.getElementType()), scalar, ValueRange{index});
+      }
+      std::string zero = isa<FloatType>(scalar.getType()) ? "0.0" : "0";
       Value carrier = materializeFull(zero);
-      result = rewriter.create<pypto::AddOp>(loc, pyptoType(convertedResult), carrier, mapped(rewriter, op.getSource()))
+      result = rewriter.create<pypto::AddOp>(loc, pyptoType(convertedResult), carrier, scalar)
                  .getResult();
     }
     rewriter.replaceOp(op, result);
@@ -4391,18 +4432,24 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
       vecExtents.push_back(one);
       vecExtents.push_back(extent);
     }
-    Value vec =
-      rewriter.create<pypto::ReshapeOp>(loc, pyptoExtentType(vecType, ValueRange(vecExtents)), mapped(rewriter, tile),
-                                        mapped(rewriter, ValueRange(vecExtents)), ValueRange());
-    // The carrier type names the padded allocation; its reshape keeps the
-    // smaller logical valid region independently of this result type.
-    Type resultType = pyptoType(valueTileType, cast<pypto::TileType>(carrier.getType()).getShape());
-    if (rowLift) {
-      return rewriter.create<pypto::RowExpandAddOp>(loc, resultType, carrier, mapped(rewriter, vec))
-        .getResult();
+    Type elem = cast<pypto::TileType>(carrier.getType()).getElementType();
+    Value input = mapped(rewriter, tile);
+    if (elem != tileType.getElementType()) {
+      auto wide = pypto::TileType::get(rewriter.getContext(), elem, {bound});
+      input = rewriter.create<pypto::CastOp>(loc, wide, input);
     }
-    return rewriter.create<pypto::ColExpandAddOp>(loc, resultType, carrier, mapped(rewriter, vec))
-      .getResult();
+    Type viewType = cast<ShapedType>(vecType).clone(elem);
+    Value vec = rewriter.create<pypto::ReshapeOp>(loc, pyptoExtentType(viewType, ValueRange(vecExtents)),
+                                                input, mapped(rewriter, ValueRange(vecExtents)), ValueRange());
+    auto shape = cast<pypto::TileType>(carrier.getType()).getShape();
+    Type resultType = pypto::TileType::get(rewriter.getContext(), elem, shape);
+    Value expanded = rowLift
+                       ? rewriter.create<pypto::RowExpandAddOp>(loc, resultType, carrier, vec).getResult()
+                       : rewriter.create<pypto::ColExpandAddOp>(loc, resultType, carrier, vec).getResult();
+    if (elem != tileType.getElementType()) {
+      expanded = rewriter.create<pypto::CastOp>(loc, pyptoType(valueTileType, shape), expanded);
+    }
+    return expanded;
   }
 
   /// The aligned bound each result axis allocates (the comparison tile's
@@ -4445,8 +4492,34 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
     return carrierExtents;
   }
 
+  // Recompute the predicate after broadcasting its numeric input. The
+  // backend represents comparison results as packed byte masks.
+  static LogicalResult liftSingletonMask(npuvector::BroadcastOp op, ShapedType resultType,
+                                         ConversionPatternRewriter &rewriter) {
+    auto sourceType = dyn_cast<npuvector::NPUVectorType>(op.getSource().getType());
+    if (!sourceType || sourceType.getRank() != 0 || resultType.getRank() != 1 || !resultType.hasStaticShape()) {
+      return failure();
+    }
+    Operation *cmp = op.getSource().getDefiningOp();
+    auto predicate = cmp ? cmpPredicateFor(cmp) : std::nullopt;
+    if (!predicate) return failure();
+    Value rhs = cmp->getOperand(1);
+    if (auto broadcast = rhs.getDefiningOp<npuvector::BroadcastOp>()) rhs = broadcast.getSource();
+    if (!isa<FloatType, IntegerType>(rhs.getType())) return failure();
+    Value lhs = expandSingletonToVector(mapped(rewriter, cmp->getOperand(0)), op.getLoc(),
+                                         resultType.getDimSize(0), rewriter);
+    if (!lhs) return failure();
+    Type maskType = pyptoType(op.getResult().getType(), cast<pypto::TileType>(lhs.getType()).getShape());
+    Value mask = rewriter.create<pypto::CmpOp>(op.getLoc(), maskType, *predicate, lhs, mapped(rewriter, rhs));
+    replaceWithPackedMask(op, mask, rewriter);
+    return success();
+  }
+
   LogicalResult matchAndRewrite(npuvector::BroadcastOp op, npuvector::BroadcastOp::Adaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const override {
+    if (succeeded(liftSingletonMask(op, cast<ShapedType>(op.getResult().getType()), rewriter))) {
+      return success();
+    }
     ArrayRef<int64_t> dimension = op.getDimension();
     bool rowLift = dimension.size() == 1 && dimension[0] == 0;
     bool colLift = dimension.size() == 1 && dimension[0] == 1;
@@ -4496,8 +4569,11 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
     collectBroadcastSiblingBounds(op, rank, siblingBounds);
     SmallVector<Value> carrierExtents =
       cmpCarrierExtents(resultType, lhsType, cmpLhs, rowLift, loc, pads, siblingBounds, rewriter);
+    auto carrierType = lhsType.getElementType().isInteger(8)
+                         ? cast<npuvector::NPUVectorType>(cast<ShapedType>(valueTileType).clone(rewriter.getF16Type()))
+                         : valueTileType;
     Value carrier =
-      createAlignedTileFull(loc, pyptoExtentType(valueTileType, ValueRange(carrierExtents)),
+      createAlignedTileFull(loc, pyptoExtentType(carrierType, ValueRange(carrierExtents)),
                             rewriter.getStringAttr(zero), mapped(rewriter, ValueRange(carrierExtents)), rewriter)
         .getResult();
     // The carrier allocates the padded sibling shape while valueTileType
@@ -4511,7 +4587,7 @@ class BroadcastCmpMaskPattern : public OpConversionPattern<npuvector::BroadcastO
     std::transform(resultType.getShape().begin(), resultType.getShape().end(), std::back_inserter(carrierValid),
                    [&](int64_t dim) { return rewriter.create<arith::ConstantIndexOp>(loc, dim); });
     carrier = rewriter
-                .create<pypto::ReshapeOp>(loc, pyptoExtentType(valueTileType, ValueRange(carrierExtents)), carrier,
+                .create<pypto::ReshapeOp>(loc, pyptoExtentType(carrierType, ValueRange(carrierExtents)), carrier,
                                           mapped(rewriter, ValueRange(carrierExtents)),
                                           mapped(rewriter, ValueRange(carrierValid)))
                 .getResult();
@@ -4714,6 +4790,23 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
   /// the mask rewriter), binary arith swaps into the runtime's
   /// tile-first form, clamps map onto the tile-scalar TMAXS/TMINS forms,
   /// and selects take the scalar on the broadcast's branch.
+  static void rewriteFusedSelect(npuvector::SelectOp select, Value scalar, Value bcast,
+                                 ConversionPatternRewriter &rewriter) {
+    bool trueIsBcast = select.getTrueValue() == bcast;
+    Value data = mapped(rewriter, trueIsBcast ? select.getFalseValue() : select.getTrueValue());
+    Value mask = mapped(rewriter, select.getCondition());
+    auto dataTile = dyn_cast<pypto::TileType>(data.getType());
+    auto maskTile = dyn_cast<pypto::TileType>(mask.getType());
+    if (dataTile && maskTile && dataTile.getShape() == ArrayRef<int64_t>({1, 1}) &&
+        maskTile.getShape() == ArrayRef<int64_t>({1})) {
+      auto flat = pypto::TileType::get(rewriter.getContext(), dataTile.getElementType(), {1});
+      data = rewriter.create<pypto::ReshapeOp>(select.getLoc(), flat, data, ValueRange{}, ValueRange{});
+    }
+    Value literal = mapped(rewriter, scalar);
+    rewriter.replaceOpWithNewOp<pypto::SelectOp>(select, pyptoResultTypes(select, ValueRange{data, literal}).front(),
+                                                 mask, trueIsBcast ? literal : data, trueIsBcast ? data : literal);
+  }
+
   static void rewriteFusedUser(Operation *user, Value scalar, Value bcast, ConversionPatternRewriter &rewriter,
                                ValueRange operands = {}) {
     if (auto cmp = dyn_cast<npuvector::CmpIOp>(user)) {
@@ -4783,14 +4876,7 @@ class ScalarBroadcastFusionPattern : public OpConversionPattern<npuvector::Broad
                                                        mapped(rewriter, scalar));
       }
     } else {
-      auto select = cast<npuvector::SelectOp>(user);
-      bool trueIsBcast = select.getTrueValue() == bcast;
-      SmallVector<Value> mappedOperands{mapped(rewriter, trueIsBcast ? select.getFalseValue() : select.getTrueValue()),
-                                          mapped(rewriter, scalar)};
-      rewriter.replaceOpWithNewOp<pypto::SelectOp>(select, pyptoResultTypes(select, mappedOperands).front(),
-                                                   mapped(rewriter, select.getCondition()),
-                                                   mapped(rewriter, trueIsBcast ? scalar : select.getTrueValue()),
-                                                   mapped(rewriter, trueIsBcast ? select.getFalseValue() : scalar));
+      rewriteFusedSelect(cast<npuvector::SelectOp>(user), scalar, bcast, rewriter);
     }
   }
 
@@ -4898,6 +4984,29 @@ static bool fuseScalarBroadcastConsumer(Operation *op, ValueRange operands, Conv
     return true;
   }
   return false;
+}
+
+// Keep literal arithmetic operands scalar before tile materialization.
+static void foldLiteralArithmeticBroadcasts(func::FuncOp funcOp) {
+  funcOp.walk([](npuvector::BroadcastOp broadcast) {
+    Value scalar = broadcast.getSource();
+    Value result = broadcast.getResult();
+    if (!isa<FloatType>(scalar.getType()) || !ScalarBroadcastFusionPattern::isLiteralScalar(scalar)) {
+      return;
+    }
+    if (!llvm::all_of(result.getUsers(), [&](Operation *user) {
+          return ScalarBroadcastFusionPattern::isFusableArithBinary(user) &&
+                 user->getOperand(1) == result &&
+                 !user->getOperand(0).getDefiningOp<npuvector::BroadcastOp>() &&
+                 ScalarBroadcastFusionPattern::isFusibleArithBinaryUser(user, result, [](Type type) {
+                   return isa<npuvector::NPUVectorType>(type);
+                 });
+        })) {
+      return;
+    }
+    result.replaceAllUsesWith(scalar);
+    broadcast.erase();
+  });
 }
 
 /// Rewrites a transpose into `pypto.transpose`: PyPTO swaps exactly
@@ -6186,10 +6295,6 @@ static void insertPyptoImport(func::FuncOp funcOp) {
 
 /// Returns true for statically shaped types holding at most one element
 /// (0-D or size-1 tiles).
-static bool isScalarTileType(Type type) {
-  auto shaped = dyn_cast<ShapedType>(type);
-  return shaped && shaped.hasStaticShape() && (shaped.getRank() == 0 || shaped.getNumElements() == 1);
-}
 
 /// Undoes the size-1 shape folds (memref.collapse_shape) that the shape
 /// normalization inserts for scalar tensors: a 0-D buffer holds the same
@@ -6382,39 +6487,13 @@ static void applyInsertSliceFold(InsertSliceFoldCandidate &item) {
   };
   Value scratchSum = cloneOver(item.ins.getDest());
   Value tailSum = cloneOver(item.tail);
-  Value sum;
-  if (isa<arith::AddFOp, arith::AddIOp>(item.bin)) {
-    // Add recombines with the source op itself: clone the bin, land the
-    // scalar result type, and drop the vectorizer's reduction markers so
-    // the scalar combine cannot be misattributed as a partial-reduction
-    // site.
-    Operation *sumOp = builder.clone(*item.bin);
-    sumOp->setOperands(ValueRange({scratchSum, tailSum}));
-    sumOp->getResult(0).setType(resultType);
-    sumOp->removeAttr("reduction_axes");
-    sumOp->removeAttr("reduction_type");
-    sum = sumOp->getResult(0);
-  } else {
-    // Max/min recombine through a comparison and select: the scalar PIL
-    // layer has no max/min callee, but gt/lt comparisons and the select
-    // conditional-expression lowering are both first-class (stage two
-    // maps them onto the `gt`/`lt` and `select` pseudo-callees, which
-    // the translator spells as infix comparisons and Python
-    // conditionals).
-    bool floatKind = isa<arith::MaximumFOp, arith::MinimumFOp>(item.bin);
-    Value cond;
-    if (floatKind) {
-      auto pred = isa<arith::MaximumFOp>(item.bin) ? arith::CmpFPredicate::OGT : arith::CmpFPredicate::OLT;
-      cond = builder.create<arith::CmpFOp>(loc, pred, scratchSum, tailSum);
-    } else {
-      auto pred = isa<arith::MaxSIOp>(item.bin)  ? arith::CmpIPredicate::sgt
-                  : isa<arith::MaxUIOp>(item.bin) ? arith::CmpIPredicate::ugt
-                  : isa<arith::MinSIOp>(item.bin) ? arith::CmpIPredicate::slt
-                                                  : arith::CmpIPredicate::ult;
-      cond = builder.create<arith::CmpIOp>(loc, pred, scratchSum, tailSum);
-    }
-    sum = builder.create<arith::SelectOp>(loc, cond, scratchSum, tailSum);
-  }
+  // Combine the reduced tiles with the original reduction operator.
+  Operation *combine = builder.clone(*item.bin);
+  combine->setOperands(ValueRange({scratchSum, tailSum}));
+  combine->getResult(0).setType(resultType);
+  combine->removeAttr("reduction_axes");
+  combine->removeAttr("reduction_type");
+  Value sum = combine->getResult(0);
   item.red->getResult(0).replaceAllUsesWith(sum);
   item.red.erase();
   if (item.ins->use_empty()) {
@@ -6532,79 +6611,6 @@ static void liftScalarCmpSelects(func::FuncOp funcOp) {
     item.select.erase();
     if (item.cmp->use_empty()) {
       item.cmp->erase();
-    }
-  }
-}
-
-/// Lowers the 0-D (scalar) chains onto plain scalars before the dialect
-/// conversion: the shape normalization folds size-1 tensors to 0-D tiles,
-/// which have no device form. A 0-D read becomes pypto.read of the single
-/// element, a 0-D broadcast is its source itself, any other op's results
-/// adopt the scalar element type, and 0-D stores are left for the
-/// transfer-write pattern (which writes scalars through pypto.write). Doing
-/// this ahead of the conversion keeps the value types stable while the
-/// patterns rewrite ops one by one.
-static void lowerZeroDimChains(func::FuncOp funcOp) {
-  SmallVector<Operation *> scalarOps;
-  funcOp.walk([&](Operation *op) {
-    if (llvm::any_of(op->getResultTypes(), isScalarTileType)) {
-      scalarOps.push_back(op);
-    }
-  });
-  OpBuilder builder(funcOp);
-  for (Operation *op : scalarOps) {
-    if (isa<npuvector::TransferReadOp, vector::TransferReadOp>(op)) {
-      // %v = pypto.read src[...]: read the single element as a scalar,
-      // forwarding the transfer's own coordinates. A genuinely 0-D source
-      // (a scalar function argument) addresses no dimension at all; the
-      // unfolded [1] buffer keeps its (possibly runtime) coordinate.
-      Value source = op->getOperand(0);
-      auto shaped = cast<ShapedType>(op->getResult(0).getType());
-      ValueRange indices =
-        TypeSwitch<Operation *, ValueRange>(op)
-          .Case<npuvector::TransferReadOp>([](npuvector::TransferReadOp read) { return read.getIndices(); })
-          .Case<vector::TransferReadOp>([](vector::TransferReadOp read) { return read.getIndices(); });
-      builder.setInsertionPoint(op);
-      Value read = builder.create<pypto::ReadOp>(op->getLoc(), shaped.getElementType(), source, indices).getResult();
-      op->getResult(0).replaceAllUsesWith(read);
-      op->erase();
-      continue;
-    }
-    if (isa<npuvector::BroadcastOp, vector::BroadcastOp>(op)) {
-      // A 0-D broadcast of a scalar is the scalar itself.
-      op->getResult(0).replaceAllUsesWith(op->getOperand(0));
-      op->erase();
-      continue;
-    }
-    for (OpResult res : op->getResults()) {
-      auto shaped = dyn_cast<ShapedType>(res.getType());
-      if (!shaped || !shaped.hasStaticShape() || shaped.getNumElements() != 1) {
-        continue;
-      }
-      if (shaped.getRank() != 0) {
-        // A size-1 tile is a scalar only when the chain under it was
-        // fully lowered: reads and broadcasts above already replaced
-        // their results with scalars, so an elementwise arith/math op
-        // whose operands are all scalars is such a chain's tail -- and
-        // an arith/math op with scalar operands and a tile result is
-        // otherwise never well-typed.
-        // Keep casts, comparisons, and selects scalar when all inputs belong to this scalar chain.
-        // Otherwise a cast can reintroduce an unaligned [1] tile_full downstream.
-        // Preserve the types of unrelated tile results.
-        StringRef ns = op->getDialect()->getNamespace();
-        bool scalarChainTail =
-          op->getNumOperands() > 0 &&
-          llvm::all_of(op->getOperands(), [](Value operand) { return !isa<ShapedType>(operand.getType()); }) &&
-          ((ns == "arith" || ns == "math") ||
-           isa<npuvector::ExtFOp, npuvector::TruncFOp, npuvector::ExtSIOp, npuvector::ExtUIOp, npuvector::TruncIOp,
-               npuvector::SIToFPOp, npuvector::UIToFPOp, npuvector::FPToSIOp, npuvector::FPToUIOp,
-               npuvector::IndexCastOp, npuvector::IndexCastUIOp, npuvector::CmpFOp, npuvector::CmpIOp,
-               npuvector::SelectOp>(op));
-        if (!scalarChainTail) {
-          continue;
-        }
-      }
-      res.setType(shaped.getElementType());
     }
   }
 }
@@ -6902,6 +6908,68 @@ static void widenBf16VectorReads(func::FuncOp funcOp) {
   }
 }
 
+static void sinkSingletonRead(npuvector::TransferReadOp read, Block &entry) {
+  auto tile = dyn_cast<npuvector::NPUVectorType>(read.getVector().getType());
+  if (!tile || tile.getRank() != 0 || read.getMask() || read->use_empty() ||
+      read->getBlock() != &entry) {
+    return;
+  }
+  SmallVector<Operation *> chain{read};
+  while (chain.back()->hasOneUse()) {
+    Operation *next = *chain.back()->getUsers().begin();
+    // Literal broadcasts have already been folded into scalar operands.
+    bool scalarArithmetic = ScalarBroadcastFusionPattern::isFusableArithBinary(next) &&
+                            next->getOperand(0) == chain.back()->getResult(0) &&
+                            isa<FloatType, IntegerType>(next->getOperand(1).getType());
+    if (next->getBlock() != read->getBlock() || next->use_empty() ||
+        (!isa<npuvector::ExtFOp, npuvector::TruncIOp, npuvector::SIToFPOp>(next) && !scalarArithmetic)) {
+      break;
+    }
+    chain.push_back(next);
+  }
+  Operation *last = chain.back();
+  auto grid = (*last->getUsers().begin())->getParentOfType<scf::ForallOp>();
+  if (!grid || grid->getBlock() != read->getBlock() ||
+      !llvm::all_of(last->getUsers(), [&](Operation *consumer) { return grid->isProperAncestor(consumer); })) {
+    return;
+  }
+  Block &body = grid.getRegion().front();
+  auto insertionPoint = body.begin();
+  for (Operation *op : chain) {
+    op->moveBefore(&body, insertionPoint);
+  }
+}
+
+// Keep singleton loads inside the device region that consumes their tiles.
+static void sinkSingletonTransferReads(func::FuncOp funcOp) {
+  auto isTransferRead = [](Operation *user) { return isa<npuvector::TransferReadOp>(user); };
+  for (BlockArgument arg : funcOp.getArguments()) {
+    auto type = dyn_cast<MemRefType>(arg.getType());
+    if (!type || !type.hasStaticShape() || type.getNumElements() != 1 ||
+        !llvm::all_of(arg.getUsers(), [&](Operation *user) {
+          if (auto collapse = dyn_cast<memref::CollapseShapeOp>(user)) {
+            return collapse.getResultType().getRank() == 0 &&
+                   llvm::all_of(collapse.getResult().getUsers(), isTransferRead);
+          }
+          return isTransferRead(user);
+        })) {
+      continue;
+    }
+    SmallVector<npuvector::TransferReadOp> reads;
+    for (Operation *user : arg.getUsers()) {
+      if (auto collapse = dyn_cast<memref::CollapseShapeOp>(user)) {
+        llvm::transform(collapse.getResult().getUsers(), std::back_inserter(reads),
+                        [](Operation *reader) { return cast<npuvector::TransferReadOp>(reader); });
+      } else {
+        reads.push_back(cast<npuvector::TransferReadOp>(user));
+      }
+    }
+    for (auto read : reads) {
+      sinkSingletonRead(read, funcOp.getBody().front());
+    }
+  }
+}
+
 /// Promotes 0-D (scalar) output parameters to [1]: the device runtime has
 /// no 0-D tensor form, so a scalar output must be handed out through a
 /// one-element buffer -- the same shape `storeScalarReturn` appends for
@@ -6995,7 +7063,6 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
       return;
     }
 
-    lowerZeroDimChains(funcOp);
 
     // Pre-conversion peepholes over the npuvector IR: fold the
     // streaming-reduction insert-slice windows onto sum linearity, and
@@ -7003,6 +7070,8 @@ struct ConvertVectorToPyptoPass : impl::ConvertVectorToPyptoBase<ConvertVectorTo
     // type converter and target freeze the value types.
     foldInsertSliceIntoReductions(funcOp);
     liftScalarCmpSelects(funcOp);
+    foldLiteralArithmeticBroadcasts(funcOp);
+    sinkSingletonTransferReads(funcOp);
 
     VectorToPyptoTypeConverter typeConverter(ctx);
     ConversionTarget target(*ctx);

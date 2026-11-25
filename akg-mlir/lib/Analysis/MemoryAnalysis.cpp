@@ -3209,6 +3209,8 @@ static int64_t getExtraBufferSizeBitsForArithSelect(arith::SelectOp selectOp) {
   return numElemsPerStride * static_cast<int64_t>(srcBitWidth);
 }
 
+static int64_t ptoDimAlignElems(Type type);
+
 void MemoryPeakEstimator::modelSelectExtraBuffer() {
   for (int64_t index : TimelineOpIndexList) {
     OpRecord &opRecord = perOpList_[index];
@@ -3218,6 +3220,19 @@ void MemoryPeakEstimator::modelSelectExtraBuffer() {
     auto selectOp = dyn_cast<arith::SelectOp>(opRecord.sourceOp);
     if (!selectOp) {
       continue;
+    }
+    if (input_.enablePto && opRecord.outputBufferIndex >= 0) {
+      const auto &output = bufferInfoList_[opRecord.outputBufferIndex];
+      if (output.dimLoopIndices.size() == 1) {
+        for (Value branch : {selectOp.getTrueValue(), selectOp.getFalseValue()}) {
+          auto input = bufferInfoIndexMap_.find(branch);
+          if (!isConstantSsaValue(branch) && input != bufferInfoIndexMap_.end() &&
+              bufferInfoList_[input->second].dimLoopIndices.empty()) {
+            // The singleton column pads the row axis of the broadcast carrier.
+            opRecord.extraBufferSizes.push_back(totalBitsfromBuffer(output) * ptoDimAlignElems(output.elementType));
+          }
+        }
+      }
     }
     const int64_t selectExtraBits = getExtraBufferSizeBitsForArithSelect(selectOp);
     if (selectExtraBits > 0) {
@@ -3432,8 +3447,7 @@ void MemoryPeakEstimator::modelNegExtraBuffer() {
   }
 }
 
-// Match VectorToPypto's partial row/column reductions. Full reductions use a
-// separate reshape/scalar lowering and must not acquire surviving-axis padding.
+// Match VectorToPypto partial reductions with surviving-axis padding.
 static bool requiresPtoReductionPadding(const OpRecord &rec, const BufferInfo &src) {
   if (!rec.isVirtualOp || rec.opType != kOpTypeArithReduce || src.dimLoopIndices.size() < 2) return false;
   if (!isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp, arith::MaximumFOp, arith::MaxNumFOp,
@@ -3608,6 +3622,29 @@ void MemoryPeakEstimator::modelReduceExtraBuffer() {
         if (auto ia = dyn_cast<IntegerAttr>(a)) {
           loopAxes.push_back(ia.getInt());
         }
+      }
+      if (input_.enablePto && source.dimLoopIndices.size() == 1 && loopAxes.size() == 1 &&
+          isa<arith::AddFOp, arith::AddIOp, arith::MaximumFOp, arith::MaxNumFOp, arith::MinimumFOp,
+              arith::MinNumFOp, arith::MaxSIOp, arith::MinSIOp>(originOp)) {
+        // A full row reduction creates a padded input and a same-sized scratch.
+        // The original rank-one buffer is already accounted for separately.
+        const int64_t unit = ptoDimAlignElems(source.elementType);
+        const int64_t width = DimLoopIndexToBound(source.dimLoopIndices.front(), orderedForOps_,
+                                                  input_.tileUpperBoundPerLoop);
+        const int64_t inputBits = totalBitsFromShape({unit, ceilFactor(width, unit)}, source.elementType, false);
+        const int64_t resultBits = totalBitsFromShape({unit, 1}, source.elementType, false);
+        opRecord.extraBufferSizes.push_back(inputBits);
+        opRecord.extraBufferSizes.push_back(inputBits);
+        opRecord.extraBufferSizes.push_back(resultBits);
+        // A separate tail reduction can require different allocation sizes.
+        // Reserve its buffers as well when the reduction is split.
+        auto loopIndex = source.dimLoopIndices.front();
+        if (loopIndex > 0 && !input_.isWholeTiledLoop.lookup(orderedForOps_[loopIndex - 1])) {
+          opRecord.extraBufferSizes.push_back(inputBits);
+          opRecord.extraBufferSizes.push_back(inputBits);
+          opRecord.extraBufferSizes.push_back(resultBits);
+        }
+        continue;
       }
       const auto &inputDimLoopIndices = bufferInfoList_[opRecord.inputBufferIndexes[0]].dimLoopIndices;
       SmallVector<int64_t, kSmallVectorSizeFour> inputShape;
