@@ -23,10 +23,12 @@
 #include <numeric>
 #include <optional>
 #include <utility>
+#include "akg/Analysis/LoopTiling.h"
 #include "akg/Analysis/MemoryAnalysis.h"
 #include "akg/Dialect/Affine/Analysis/GpuTemplateTilingSolver.h"
 #include "akg/Utils/GlobalVars.hpp"
 #include "akg/Utils/AnalysisCommon.hpp"
+#include "akg/Utils/AnalysisForNpu.hpp"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -953,6 +955,8 @@ using TransposeVectorInfos = SmallVector<TransposeVectorInfo, kSmallVectorSizeZe
 
 struct NpuBandContext {
   bool enablePto{false};
+  bool useVecAllocationModel{false};
+  int64_t vecUbLimitBytes{0};
   func::FuncOp func;
   size_t bandIdx{0};
   SmallVector<AxisPtr, kSmallVectorSizeFour> axes;
@@ -1140,12 +1144,11 @@ int64_t alignUbElems(int64_t elems, int64_t typeBits) {
   return std::max<int64_t>((bits / kUbAlignBits) * kUbAlignBits / safeTypeBits, 1);
 }
 
-UbCapacity computeUbCapacity(const NpuModelGraphPtr &npuGraph) {
+UbCapacity computeUbCapacity(const NpuModelGraphPtr &npuGraph, int64_t ubBytes) {
   UbCapacity c;
   if (!npuGraph) {
     return c;
   }
-  int64_t ubBytes = (npuGraph->ubSize > 0) ? npuGraph->ubSize : kNpuFallbackUbSizeInBytes;
   ubBytes = std::max<int64_t>(ubBytes - kUbGuardReserveBytes, kUbAlignBytes);
   c.smallestTypeBits = std::max<int64_t>(static_cast<int64_t>(npuGraph->smallestTypeBits), 1);
   int64_t maxBufferCnt = std::max<int64_t>(npuGraph->maxBufferCnt, 1);
@@ -2014,10 +2017,17 @@ NpuBandContext buildNpuBandContext(const NpuModelGraphPtr &npuGraph, size_t band
   }
 
   ctx.enablePto = npuGraph->enablePto;
+  ctx.vecUbLimitBytes = npuGraph->ubSize > 0 ? npuGraph->ubSize : kNpuFallbackUbSizeInBytes;
+  if (ctx.enablePto) {
+    if (const auto *config = akg::findHardwareConfig(npuGraph->arch)) {
+      ctx.vecUbLimitBytes = std::min<int64_t>(ctx.vecUbLimitBytes, config->vecUbLimitBytes);
+      ctx.useVecAllocationModel = !config->isRegBasedArch;
+    }
+  }
   ctx.graphTemplate = npuGraph->graphTemplate;
   ctx.targetBlocks =
     (npuGraph->coreNum > 0) ? static_cast<int64_t>(npuGraph->coreNum) : static_cast<int64_t>(kNpuTargetBlocks);
-  UbCapacity ub = computeUbCapacity(npuGraph);
+  UbCapacity ub = computeUbCapacity(npuGraph, ctx.vecUbLimitBytes);
   ctx.rawUbElems = ub.rawUbElems;
   ctx.ubCapacityElems = ub.ubCapacityElems;
   ctx.vectorUbCapacityElems = ub.ubCapacityElems;
@@ -2322,10 +2332,30 @@ bool satisfiesStrideAlignWithoutExpansion(const NpuBandContext &ctx, const Vecto
                                           ArrayRef<int64_t> axisTiles) {
   return computeReserveBytes(ctx, reserve, axisTiles) <= computeLogicalReserveBytes(reserve, axisTiles);
 }
-int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
+static void collectUnitParallelLoops(const NpuBandContext &ctx, ArrayRef<unsigned> outerTiles,
+                                     PeakAnalysisInput &input) {
+  SmallVector<scf::ForOp, kSmallVectorSizeSix> loops;
+  for (const auto &axis : ctx.axes) {
+    if (auto loop = dyn_cast_or_null<scf::ForOp>(axis ? axis->getLoopOperation() : nullptr)) {
+      loops.push_back(loop);
+    }
+  }
+  if (loops.size() == ctx.axes.size()) {
+    SmallVector<scf::ForOp, kSmallVectorSizeSix> unitParallelLoops;
+    collectStaticUnitParallelLoops(ctx.func, loops, outerTiles, unitParallelLoops);
+    input.unitParallelLoops.insert(unitParallelLoops.begin(), unitParallelLoops.end());
+  }
+}
+
+PeakAnalysisResult computeVectorPeakReserve(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles,
+                                            ArrayRef<unsigned> outerTiles = {}) {
   PeakAnalysisInput input;
   input.func = ctx.func;
   input.enablePto = ctx.enablePto;
+  input.vecUbLimitBytes = ctx.vecUbLimitBytes;
+  input.planVecAllocations = ctx.useVecAllocationModel && !ctx.hasDynamicAxis &&
+                             (!outerTiles.empty() || (ctx.axes.size() == 1 && ctx.lastAxisIsReduction));
+  if (input.planVecAllocations && !outerTiles.empty()) collectUnitParallelLoops(ctx, outerTiles, input);
   for (auto [idx, axis] : llvm::enumerate(ctx.axes)) {
     int64_t tile = (idx < axisTiles.size()) ? axisTiles[idx] : 1;
     int64_t extent = (idx < ctx.extents.size()) ? ctx.extents[idx] : tile;
@@ -2346,8 +2376,13 @@ int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_
   }
   PeakAnalysisResult result;
   estimatePeakForTiling(input, result);
-  return result.PeakBits / kBitsPerByte;
+  return result;
 }
+
+int64_t computeVectorPeakReserveBytes(const NpuBandContext &ctx, ArrayRef<int64_t> axisTiles) {
+  return computeVectorPeakReserve(ctx, axisTiles).PeakBits / kBitsPerByte;
+}
+
 int64_t computeAlignedShapeBytes(ArrayRef<int64_t> shape, ArrayRef<int64_t> alignBytes, int64_t elemBytes) {
   int64_t elems = 1;
   for (size_t i = 0; i < shape.size(); ++i) {
@@ -4228,6 +4263,65 @@ static unsigned saturateReductionTileValue(int64_t alignUnit, const AxisPtr axis
   return saturateToTileValue(std::max<int64_t>(fullExtent, 1));
 }
 
+static bool shrinkVectorTile(const NpuBandContext &ctx, BandTilePlan &plan, MutableArrayRef<int64_t> tiles,
+                             size_t vectorAxis) {
+  auto outer = plan.outerTiles;
+  // Preserve the complete row when a reduction also vectorizes its prefix.
+  // Splitting its carried tile at a remainder needs an extract/insert slice.
+  const bool wholeReduction =
+    ctx.lastAxisIsReduction && llvm::count(plan.multiVecAxisMask, true) > 1 && tiles.back() >= ctx.extents.back();
+  for (size_t i = 0; i < tiles.size(); ++i) {
+    const size_t axis = wholeReduction ? i : tiles.size() - 1 - i;
+    if (tiles[axis] <= 1) continue;
+    const int64_t step = std::max<int64_t>(1, ctx.axesAlignUnits[axis]);
+    const bool shared = outer[axis] == plan.innerTiles[axis];
+    for (int64_t width = tiles[axis] - step; width > 0; width -= step) {
+      if (wholeReduction && axis + 1 == tiles.size() && ctx.extents[axis] % width != 0) continue;
+      tiles[axis] = width;
+      if (shared) outer[axis] = saturateToTileValue(width);
+      const auto candidate = computeVectorPeakReserve(ctx, tiles, outer);
+      if (candidate.valid && candidate.PeakBits <= ctx.vecUbLimitBytes * kBitsPerByte) {
+        for (size_t j = 0; j < tiles.size(); ++j)
+          if (j == vectorAxis || (plan.usesMultiVecScheme && plan.multiVecAxisMask[j]))
+            plan.innerTiles[j] = saturateToTileValue(tiles[j]);
+        plan.outerTiles = outer;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Physical full/tail sizes can change non-monotonically, so a failed tile
+// does not exclude larger widths. Inspect smaller aligned candidates in
+// descending order after the core dispatch and outer tiles are known.
+bool fitBandToVecUbLimit(const NpuBandContext &ctx, BandTilePlan &plan) {
+  if (!ctx.useVecAllocationModel || ctx.hasDynamicAxis || plan.innerTiles.empty()) {
+    return true;
+  }
+  const int64_t capacityBits = ctx.vecUbLimitBytes * kBitsPerByte;
+  SmallVector<int64_t, kSmallVectorSizeSix> tiles(plan.innerTiles.size(), 1);
+  std::optional<size_t> vectorAxis;
+  if (plan.usesMultiVecScheme) {
+    for (auto [index, isVector] : llvm::enumerate(plan.multiVecAxisMask)) {
+      if (isVector) {
+        vectorAxis = index;
+        tiles[index] = plan.innerTiles[index];
+      }
+    }
+  } else if ((vectorAxis = findDefaultVectorTargetAxis(ctx))) {
+    tiles[*vectorAxis] = plan.innerTiles[*vectorAxis];
+  }
+  if (!vectorAxis) {
+    return true;
+  }
+  const auto peak = computeVectorPeakReserve(ctx, tiles, plan.outerTiles);
+  if (!peak.valid || peak.PeakBits <= capacityBits) {
+    return true;
+  }
+  return shrinkVectorTile(ctx, plan, tiles, *vectorAxis);
+}
+
 void applyBandTilePlan(const NpuBandContext &ctx, const SmallVector<AxisPtr, kSmallVectorSizeFour> &bandAxes,
                        const BandTilePlan &plan, size_t &maxLevelToTile) {
   constexpr size_t kTileLevels = 2;
@@ -4374,6 +4468,10 @@ void NpuDefaultTileStrategy::applyTilingToAxes(const NpuModelGraphPtr npuGraph, 
                    tryBuildElementwisePlan(bandCtx, bandPlan) || tryBuildDynamicSingleAxisVectorPlan(bandCtx, bandPlan);
     if (matched) {
       adjustParallelPrefixOuterTiles(bandCtx, bandPlan);
+      if (!fitBandToVecUbLimit(bandCtx, bandPlan)) {
+        bandCtx.func->emitError("no aligned PTO vector tile fits the available Vec memory");
+        return;
+      }
       applyBandTilePlan(bandCtx, bandAxes, bandPlan, maxLevelToTile);
       tagMultiVecLoops(bandCtx, bandAxes, bandPlan);
       continue;

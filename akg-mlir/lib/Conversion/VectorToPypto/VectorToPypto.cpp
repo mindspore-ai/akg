@@ -30,6 +30,7 @@
 #include "akg/Dialect/EmitPy/IR/EmitPyOps.h"
 #include "akg/Dialect/EmitPy/IR/EmitPyTypes.h"
 #include "akg/Dialect/NPUVector/IR/NPUVector.h"
+#include "akg/Utils/AnalysisForNpu.hpp"
 #include "akg/Dialect/Pypto/IR/PyptoOps.h"
 #include "akg/Dialect/Pypto/IR/PyptoTypes.h"
 
@@ -1133,7 +1134,7 @@ static AllocationShape computeTileAllocationShape(Value v, unsigned depth) {
     SmallVector<int64_t> shape(type.getShape());
     // A BF16 load can retain its 32-byte row alignment after casting to
     // FP32. Reserve 64-byte rows for the local accumulator as well.
-    int64_t alignment = 64 / (type.getElementType().getIntOrFloatBitWidth() / 8);
+    int64_t alignment = akg::pto::localTileAlignment(type.getElementType());
     shape.back() = llvm::divideCeil(shape.back(), alignment) * alignment;
     return shape;
   }
@@ -6023,7 +6024,7 @@ class LocalTilePattern : public OpConversionPattern<pypto::LocalTileOp> {
     SmallVector<int64_t> shape(type.getShape());
     // A BF16 load can retain its 32-byte row alignment after casting to
     // FP32. Reserve 64-byte rows for the local accumulator as well.
-    int64_t alignment = 64 / (type.getElementType().getIntOrFloatBitWidth() / 8);
+    int64_t alignment = akg::pto::localTileAlignment(type.getElementType());
     shape.back() = llvm::divideCeil(shape.back(), alignment) * alignment;
     rewriter.replaceOpWithNewOp<pypto::CreateTileOp>(op, pyptoType(op.getResult().getType(), shape), ValueRange{});
     return success();

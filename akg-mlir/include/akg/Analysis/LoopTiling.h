@@ -41,6 +41,10 @@ constexpr unsigned kInvalidTilingSelectorIndex = std::numeric_limits<unsigned>::
 
 std::string formatTilingKeySuffix(int64_t key);
 
+// Loops replaced by a single dispatch coordinate per core for this static band plan.
+void collectStaticUnitParallelLoops(func::FuncOp func, ArrayRef<scf::ForOp> band, ArrayRef<unsigned> outerTiles,
+                                    llvm::SmallVectorImpl<scf::ForOp> &loops);
+
 struct TilingMetadata {
   std::vector<SmallVector<unsigned, kSmallVectorSizeSix>> bandTileSizes;
   std::vector<SmallVector<int, kSmallVectorSizeSix>> bandConstraintMaxs;

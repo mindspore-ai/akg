@@ -77,32 +77,48 @@ class HardwareConfig {
   uint32_t l0b{0};
   uint32_t l0c{0};
   uint32_t ub{0};
+  uint32_t vecUbLimitBytes{0};
   bool isRegBasedArch{false};
   uint32_t RegVectorLength{0};
 };
 
 inline const std::vector<std::pair<std::string, HardwareConfig>> &getHardwareConfigs() {
+  // Per-core Vec limits from the PyPTO backend SoC configurations (bytes).
+  constexpr uint32_t kVecUbLimit910 = 184 * 1024;
+  constexpr uint32_t kVecUbLimit950 = 240 * 1024;
   static const std::vector<std::pair<std::string, HardwareConfig>> kHardwareConfigs = {
-    // Field order: coreNumAic, coreNumAiv, l2, l1, l0a, l0b, l0c, ub, isRegBasedArch[, RegVectorLength]
-    {kSoc910B1, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910B2, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910B2C, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910B3, HardwareConfig{20, 40, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910B4, HardwareConfig{20, 40, 100663296, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910B4_1, HardwareConfig{20, 40, 176160768, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910_9362, HardwareConfig{20, 40, 176160768, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910_9372, HardwareConfig{20, 40, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910_9381, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910_9382, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910_9391, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc910_9392, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, false}},
-    {kSoc950PR_9579, HardwareConfig{28, 56, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
-    {kSoc950PR_9581, HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
-    {kSoc950PR_9589, HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
-    {kSoc950PR_9599, HardwareConfig{36, 72, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
-    {kSoc950DT_9581, HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, true, 256}},
+    // Field order: coreNumAic, coreNumAiv, l2, l1, l0a, l0b, l0c, ub, vecUbLimitBytes, isRegBasedArch[,
+    // RegVectorLength]
+    {kSoc910B1, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910B2, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910B2C, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910B3, HardwareConfig{20, 40, 201326592, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910B4, HardwareConfig{20, 40, 100663296, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910B4_1, HardwareConfig{20, 40, 176160768, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910_9362, HardwareConfig{20, 40, 176160768, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910_9372, HardwareConfig{20, 40, 201326592, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910_9381, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910_9382, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910_9391, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc910_9392, HardwareConfig{24, 48, 201326592, 524288, 65536, 65536, 131072, 196608, kVecUbLimit910, false}},
+    {kSoc950PR_9579,
+     HardwareConfig{28, 56, 134217728, 524288, 65536, 65536, 262144, 253952, kVecUbLimit950, true, 256}},
+    {kSoc950PR_9581,
+     HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, kVecUbLimit950, true, 256}},
+    {kSoc950PR_9589,
+     HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, kVecUbLimit950, true, 256}},
+    {kSoc950PR_9599,
+     HardwareConfig{36, 72, 134217728, 524288, 65536, 65536, 262144, 253952, kVecUbLimit950, true, 256}},
+    {kSoc950DT_9581,
+     HardwareConfig{32, 64, 134217728, 524288, 65536, 65536, 262144, 253952, kVecUbLimit950, true, 256}},
   };
   return kHardwareConfigs;
+}
+
+inline const HardwareConfig *findHardwareConfig(const std::string &socVersion) {
+  const auto &configs = getHardwareConfigs();
+  auto it = std::find_if(configs.begin(), configs.end(), [&](const auto &entry) { return entry.first == socVersion; });
+  return it == configs.end() ? nullptr : &it->second;
 }
 
 class NpuInfo {
@@ -129,16 +145,11 @@ class NpuInfo {
 
   const HardwareConfig &getConfigByVersion(const std::string &socVersion) const {
     static HardwareConfig invalidHardwareConfig;
-    const auto &configs = getHardwareConfigs();
-    const auto it = std::find_if(
-      configs.begin(), configs.end(),
-      [&socVersion](const std::pair<std::string, HardwareConfig> &entry) { return entry.first == socVersion; });
-    if (it == configs.end()) {
-      llvm::errs() << "The config for socVersion: " << socVersion << " does not exist.";
-      return invalidHardwareConfig;
+    if (const auto *config = findHardwareConfig(socVersion)) {
+      return *config;
     }
-
-    return it->second;
+    llvm::errs() << "The config for socVersion: " << socVersion << " does not exist.";
+    return invalidHardwareConfig;
   }
 
  private:
@@ -176,6 +187,18 @@ inline int64_t getElementBitWidth(Type type) {
   }
   return static_cast<int64_t>(elemType.getIntOrFloatBitWidth());
 }
+
+namespace pto {
+// Physical tile storage uses byte-sized BOOL elements and 64-bit indices.
+inline int64_t allocationUnit(Type elementType) {
+  const int64_t bytes = ceilDivInt64(getElementBitWidth(elementType), kNpuBitsPerByte);
+  return kNpuUbAlignBytes / std::gcd(kNpuUbAlignBytes, bytes);
+}
+// VectorToPypto local accumulators also cover the alignment inherited from a narrower load.
+inline int64_t localTileAlignment(Type elementType) {
+  return 2 * allocationUnit(elementType);
+}
+}  // namespace pto
 
 inline int64_t getBishengStrideAlignTargetForBits(int64_t elementBits) {
   int64_t bitWidth = std::max<int64_t>(elementBits, 1);
